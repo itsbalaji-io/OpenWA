@@ -19,7 +19,7 @@ import { BadRequestException, NotImplementedException } from '@nestjs/common';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
-import { chatKind, parseWaId, toNeutralJid, userPart } from '../identity/wa-id';
+import { chatKind, parseWaId, toNeutralJid, toParticipantWid, userPart } from '../identity/wa-id';
 import {
   chatHistoryMediaBudgetBytes,
   coerceDeclaredSize,
@@ -32,7 +32,7 @@ import { buildVCard } from './vcard';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
-import { EngineNotSentError, markNothingSent } from '../../common/errors/engine-not-sent.error';
+import { EngineNotSentError, markNothingSent, markOutcomeUnknown } from '../../common/errors/engine-not-sent.error';
 import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { type WwebjsEngineHost, requireClient, withPage } from './wwebjs-host';
 import { PAGE_RELOADING_MESSAGE, isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
@@ -346,6 +346,19 @@ export function toMessageResult(msg: Message | undefined): MessageResult {
 }
 
 /**
+ * The mentions as WhatsApp Web's strict id parser takes them: one neutral id per entry. The send DTOs accept an
+ * individual id in any spelling (padding, upper case, the `s.whatsapp.net` dialect, a `:device` suffix) and hand it
+ * on as typed, and a `message:sending` plugin may rewrite the list after validation. The Baileys adapter folds them
+ * at its boundary and so does this one. A lid stays a lid. Only strings inside a list are folded: anything else a
+ * plugin returns, an entry that is not a string or a list that is not an array, reaches the library as it would have,
+ * rather than becoming a TypeError here.
+ */
+function neutralMentions(mentions: string[]): string[] {
+  if (!Array.isArray(mentions)) return mentions;
+  return mentions.map(mention => (typeof mention === 'string' ? toParticipantWid(mention) : mention));
+}
+
+/**
  * whatsapp-web.js drops some sends to a channel or a status/broadcast list before it touches the page
  * (`Client.js` sendMessage returns null): a reply, a location or a contact card to any of them, and a
  * poll or a sticker to a status or broadcast list. `toMessageResult` can only read that null as a send
@@ -394,6 +407,18 @@ export class WwebjsMessaging {
       this.host.ensureReady();
     } catch (error) {
       throw markNothingSent(error);
+    }
+  }
+
+  /**
+   * The readiness check after a send attempt has run: its 409 does not prove the first attempt stayed off the wire,
+   * so it carries markOutcomeUnknown, and a paced send keeps its admission as a keyed send keeps its `Idempotency-Key`.
+   */
+  private ensureReadyAfterAttempt(): void {
+    try {
+      this.host.ensureReady();
+    } catch (error) {
+      throw markOutcomeUnknown(error);
     }
   }
 
@@ -486,7 +511,7 @@ export class WwebjsMessaging {
    * the send breaker does not count: it says nothing about the account.
    */
   private unansweredLookup(chatId: string, sendError: Error, failure: unknown): Error {
-    if (failure instanceof EngineNotReadyError) return failure;
+    if (failure instanceof EngineNotReadyError) return markOutcomeUnknown(failure);
     this.host.logger.warn('Could not re-resolve a recipient after "No LID for user": the lookup did not answer', {
       sessionId: this.host.config.sessionId,
       chatId,
@@ -544,6 +569,11 @@ export class WwebjsMessaging {
    * A re-resolution that threw established nothing, so it gets no such verdict and no retry: see
    * {@link unansweredLookup}.
    *
+   * The answers given once the first attempt failed with `No LID for user` (a not-ready 409, the unreachable
+   * recipient, a quote the retry cannot resolve) carry markOutcomeUnknown: the page can throw after the message is
+   * on the wire, so none of them proves the message stayed off it. An answer given before that attempt still
+   * carries markNothingSent.
+   *
    * `quotedMessageId` gets the same treatment for the same reason. Opting out of `ignoreQuoteErrors`
    * makes an id the page cannot resolve throw, but it throws a bare Error, and two things follow from
    * that: the caller receives a 500 for an id THEY supplied, where the Baileys adapter answers 404
@@ -585,12 +615,12 @@ export class WwebjsMessaging {
       const fresh = lookup.id;
       // Same gap as above, and before the comparison: a lookup that failed because the session went away
       // answers the unresolved id, which would read as an unreachable recipient.
-      this.host.ensureReady();
+      this.ensureReadyAfterAttempt();
       if (!lookup.answered) {
         throw this.unansweredLookup(chatId, err as Error, lookup.failure);
       }
       if (fresh === to) {
-        throw new RecipientUnreachableError(chatId);
+        throw markOutcomeUnknown(new RecipientUnreachableError(chatId));
       }
       // The first send threw, but wwjs can throw after the message is already on the wire — so this
       // retry may produce a duplicate. Log it: without this the second copy is invisible.
@@ -609,12 +639,12 @@ export class WwebjsMessaging {
         // is the same caller fault — without this it would be a 500 on the retry where the identical
         // failure on the first attempt was a 404.
         if (quotedMessageId && isQuoteUnresolvedError(retryErr)) {
-          throw new MessageNotFoundError(quotedMessageId);
+          throw markOutcomeUnknown(new MessageNotFoundError(quotedMessageId));
         }
         // The re-resolved id is no better than the stale one — same unreachable recipient, and the
         // raw error would 500 exactly as the first one did.
         if (isNoLidForUserError(retryErr)) {
-          throw new RecipientUnreachableError(chatId);
+          throw markOutcomeUnknown(new RecipientUnreachableError(chatId));
         }
         throw toCapturedPageError(retryErr);
       }
@@ -628,8 +658,8 @@ export class WwebjsMessaging {
     options?: { linkPreview?: boolean; customPreview?: CustomLinkPreview } & Quotable,
   ): Promise<MessageResult> {
     this.ensureReadyToSend();
-    // wwebjs accepts neutral `<phone>@c.us` WIDs directly as mentionedJidList, so no de-normalization
-    // is needed. Omit the options object entirely when none are given to keep today's send behavior.
+    // wwebjs takes the neutral `<phone>@c.us` / `<lid>@lid` WIDs as mentionedJidList, so each mention is folded to
+    // that form (neutralMentions). Omit the options object entirely when none are given to keep today's send behavior.
     //
     // Only an explicit `false` is forwarded. whatsapp-web.js reads the flag as
     // `linkPreview === false ? undefined : true` (Client.js:1458), so passing `true` is identical to
@@ -647,7 +677,7 @@ export class WwebjsMessaging {
       quotedMessageId?: string;
       ignoreQuoteErrors?: boolean;
     } = this.quoteOptions(options?.quotedMessageId);
-    if (mentions?.length) sendOptions.mentions = mentions;
+    if (mentions?.length) sendOptions.mentions = neutralMentions(mentions);
     if (options?.linkPreview === false) sendOptions.linkPreview = false;
 
     const msg = await this.sendResolved(
@@ -712,7 +742,7 @@ export class WwebjsMessaging {
       to =>
         this.client().sendMessage(to, messageMedia, {
           caption: media.caption,
-          ...(media.mentions?.length ? { mentions: media.mentions } : {}),
+          ...(media.mentions?.length ? { mentions: neutralMentions(media.mentions) } : {}),
           // sendAudioAsVoice only for audio, sendMediaAsDocument only for documents;
           // {...undefined} contributes no keys.
           ...extraOptions,
@@ -795,7 +825,7 @@ export class WwebjsMessaging {
           ...this.quoteOptions(media.quotedMessageId),
           // Same options bag every other media send uses, so the library tags a sticker exactly as it
           // tags an image. Omitted when empty to leave an untagged sticker call unchanged.
-          ...(media.mentions?.length ? { mentions: media.mentions } : {}),
+          ...(media.mentions?.length ? { mentions: neutralMentions(media.mentions) } : {}),
         }),
       media.quotedMessageId,
     );
@@ -857,7 +887,9 @@ export class WwebjsMessaging {
       // no tags were asked for, keeping an ordinary reply's call shape untouched (same rule as the
       // send path).
       const msg = await this.sendResolved(chatId, to =>
-        mentions?.length ? quotedMsg.reply(text, to, { mentions }) : quotedMsg.reply(text, to),
+        mentions?.length
+          ? quotedMsg.reply(text, to, { mentions: neutralMentions(mentions) })
+          : quotedMsg.reply(text, to),
       );
       return toMessageResult(msg);
     } catch (error) {
@@ -1222,12 +1254,14 @@ export class WwebjsMessaging {
     return results;
   }
 
-  async deleteMessage(chatId: string, messageId: string, forEveryone: boolean = true): Promise<void> {
+  async deleteMessage(chatId: string, messageId: string, forEveryone: boolean = true): Promise<string | void> {
     this.host.ensureReady();
     // NOTE: do NOT resolve chatId to @lid here — delete operates on the found message's own key, not
     // this chatId, so LID-resolving the lookup gives no benefit and would miss a message stored under
     // the pre-migration @c.us chat (#583).
-    await this.withPage('deleteMessage', async () => {
+    // The message is found by its serialized id or by the bare key id, but its row is keyed by the serialized one,
+    // which is what the caller needs to clear the stored copy.
+    const deleted = await this.withPage('deleteMessage', async () => {
       const chat = await this.client()
         .getChatById(chatId)
         .catch(error => recoverGroupChatById(this.host, 'deleteMessage', chatId, error));
@@ -1241,8 +1275,10 @@ export class WwebjsMessaging {
       }
       this.host.ensureReady();
       await message.delete(forEveryone);
+      return readWid(message.id);
     });
     this.host.logger.debug('Deleted message', { chatId, messageId, forEveryone });
+    return deleted;
   }
 
   async editMessage(chatId: string, messageId: string, body: string, mentions?: string[]): Promise<MessageResult> {
@@ -1266,7 +1302,7 @@ export class WwebjsMessaging {
       this.host.ensureReady();
       // An edit REPLACES the content, so tags are re-applied rather than preserved: omitting mentions
       // drops whatever the original carried. Options omitted entirely when none were asked for.
-      return mentions?.length ? message.edit(body, { mentions }) : message.edit(body);
+      return mentions?.length ? message.edit(body, { mentions: neutralMentions(mentions) }) : message.edit(body);
     });
     if (!edited) {
       // wwebjs RESOLVES null (instead of throwing) when the page-side edit is refused — only the

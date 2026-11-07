@@ -25,15 +25,17 @@ import {
   CONNECTION_REPLACED_REASON,
   LOGOUT_CLEANUP_FAILED_REASON,
 } from '../terminal-engine-failure';
-import { differentWaIds, type BaileysEvents } from './baileys-events';
+import { differentWaIds, keyChatIds, type BaileysEvents } from './baileys-events';
 import type { BaileysHistory } from './baileys-history';
 import { SESSION_STORE_MAP_CAP_DEFAULT, type BaileysSessionStore } from './baileys-session-store';
+import { ownAccountIds } from './baileys-stored-chat-previews.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
 import { chatKind, userPart } from '../identity/wa-id';
 
 /**
  * How long a start waits for the stored chats. They serve the listing only, so a read that is slower than
- * this (a very large table, a busy database) is given up rather than holding the session's start.
+ * this (a very large table, a busy database) is given up rather than holding the session's start. On SQLite
+ * the read is one synchronous statement, so this clock cannot fire until it has ended.
  */
 const STORED_PREVIEWS_READ_TIMEOUT_MS = 10_000;
 
@@ -530,13 +532,16 @@ export class BaileysLifecycle {
           return stored.message ?? undefined;
         }
         const neutral = (jid: string): string => this.host.toNeutralJid(jid);
-        const chat = [stored.key.remoteJid, stored.key.remoteJidAlt];
+        const chat = keyChatIds(stored.key);
         if (differentWaIds(chat, [key.remoteJid], neutral)) {
           return undefined;
         }
         // A lid the session cannot map cannot be compared with a phone-number chat, so ask Baileys'
         // own mapping (a local store read) for its phone number too. When neither knows it, the retry
-        // is still answered: refusing then would leave a real recipient waiting for good.
+        // is still answered: refusing then would leave a real recipient waiting for good, at the cost of
+        // answering a requester known only by such a lid that holds the id of a phone-number chat's message.
+        // The stored side is not looked up: a message filed under a lid with no number beside it, as the
+        // account's own message typed in a chat addressed by lid is, answers a retry asked by any phone number.
         const lid = key.remoteJid;
         if (lid?.endsWith('@lid') && neutral(lid).endsWith('@lid')) {
           const pn = await this.sock?.signalRepository?.lidMapping?.getPNForLID(lid).catch(() => null);
@@ -1241,7 +1246,8 @@ export class BaileysLifecycle {
    * an API send stored before 0.27.0. A send stored before the number was known names no account and does
    * not count. A read that fails, or that takes longer than {@link STORED_PREVIEWS_READ_TIMEOUT_MS}, leaves
    * the listing as it was before chats were seeded: it fills from live traffic, and a late answer is
-   * dropped, since the seed is only safe before the socket opens.
+   * dropped, since the seed is only safe before the socket opens. On SQLite the read blocks the event loop
+   * until it ends, so only a failure leaves the listing unseeded there.
    */
   private async seedStoredPreviews(phone: string): Promise<void> {
     const source = this.host.config.storedChatPreviews;
@@ -1252,9 +1258,8 @@ export class BaileysLifecycle {
     );
     let giveUp: ReturnType<typeof setTimeout> | undefined;
     try {
-      const own = [`${phone}@c.us`, `${phone}@s.whatsapp.net`, phone];
       const rows = await Promise.race([
-        source.latestPerChat(this.host.config.dbSessionId, own, limit),
+        source.latestPerChat(this.host.config.dbSessionId, ownAccountIds(phone), limit),
         new Promise<never>((_, reject) => {
           giveUp = setTimeout(
             () => reject(new Error(`no answer within ${STORED_PREVIEWS_READ_TIMEOUT_MS} ms`)),

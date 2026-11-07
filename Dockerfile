@@ -211,6 +211,15 @@ COPY scripts/postinstall.js scripts/atomic-write.js scripts/patch-wwebjs-201832.
 # msgpackr-extract) are optional=true with runtime fallbacks. The patchers that DO
 # need to run are the explicit fatal invocations below; baileys' preinstall is only
 # a node-version check that the engines field enforces anyway.
+#
+# typescript and ts-node come out again at the end of the same RUN. They are root devDependencies
+# and also optional peers of valibot and typeorm, so the lockfile marks them devOptional and
+# `--omit=dev` keeps them: about 24 MiB that nothing loads. `node dist/main` registers no loader,
+# and migration:*:prod run the plain typeorm CLI on the compiled data sources under dist/. Their
+# bin links go with them, or they would dangle. ts-node's small helper packages (acorn, diff and
+# others) stay: they are generic names that a later dependency may come to share. The removal has
+# a line of its own, ahead of the cache clean that docs/10 quotes, and
+# scripts/smoke-test-engine-libs.sh checks the built image on each architecture.
 RUN npm ci --omit=dev --ignore-scripts \
     && node scripts/patch-wwebjs-201832.js \
     && node scripts/patch-wwebjs-newsletter-preview.js \
@@ -225,6 +234,8 @@ RUN npm ci --omit=dev --ignore-scripts \
     && node scripts/patch-baileys-newsletter-create.js \
     && node scripts/patch-baileys-pairing.js \
     && node scripts/patch-wwebjs-puppeteer.js \
+    && rm -rf node_modules/typescript node_modules/ts-node node_modules/.bin/tsc node_modules/.bin/tsserver \
+        node_modules/.bin/ts-script node_modules/.bin/ts-node* \
     && npm cache clean --force
 
 # Replace the npm the base image bundles. npm is not on the request path — the entrypoint runs
@@ -266,7 +277,7 @@ RUN if [ "$TARGETARCH" = arm64 ]; then \
         ln -s /usr/bin/chromium /usr/local/bin/puppeteer-chrome; \
     else \
         mkdir -p /opt/puppeteer && \
-        PUPPETEER_CACHE_DIR=/opt/puppeteer ./node_modules/.bin/puppeteer browsers install 'chrome@156.0.8078.80' && \
+        PUPPETEER_CACHE_DIR=/opt/puppeteer ./node_modules/.bin/puppeteer browsers install 'chrome@157.0.8103.38' && \
         chown -R openwa:openwa /opt/puppeteer && \
         chrome_path=$(find /opt/puppeteer/chrome/linux*/chrome-linux64/chrome | head -n 1) && \
         test -n "$chrome_path" && \
