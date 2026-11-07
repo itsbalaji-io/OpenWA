@@ -223,6 +223,10 @@ export class StatusService {
       sessionId,
       () => new NotFoundException(`Session ${sessionId} not found or not connected`),
     );
-    return engine.deleteStatus(statusId);
+    try {
+      await engine.deleteStatus(statusId);
+    } finally {
+      await this.store.remove(sessionId, statusId).catch(() => {});
+    }
   }
 }

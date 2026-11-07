@@ -256,7 +256,10 @@ async function bootstrap() {
   );
 
   const port = process.env.PORT || 2785;
-  await app.listen(port);
+  // Bind to localhost only by default so the OpenWA API is not reachable from other devices on the
+  // network. Set BIND_HOST=0.0.0.0 to restore the previous behaviour (all interfaces).
+  const bindHost = process.env.BIND_HOST || '127.0.0.1';
+  await app.listen(port, bindHost);
 
   // Advertise the configured public URL, matching the AuthService banner (auth.service.ts). A bare
   // `localhost` literal here contradicted that banner and read as "the UI is pinned to localhost",
