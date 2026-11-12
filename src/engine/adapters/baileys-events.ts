@@ -2020,10 +2020,11 @@ export class BaileysEvents {
     }
     const isSelf = this.selfMatcher();
     for (const { key, receipt } of Array.isArray(updates) ? updates : []) {
+      const isStatus = key?.remoteJid === 'status@broadcast' || chatKind(key?.remoteJid ?? '') === 'status';
       if (
         !key?.id ||
         !key.remoteJid ||
-        key.fromMe !== true ||
+        (key.fromMe !== true && !isStatus) ||
         !RECEIPT_CHAT_KINDS.has(chatKind(key.remoteJid)) ||
         !receipt?.userJid ||
         isSelf(receipt.userJid)
