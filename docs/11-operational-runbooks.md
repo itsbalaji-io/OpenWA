@@ -88,7 +88,8 @@ docker compose restart openwa-api
 curl http://localhost:2785/api/health
 
 # Sessions reconnect on their own only with AUTO_START_SESSIONS=true. The production compose
-# leaves it unset (off), so start each session first:
+# leaves it unset (off), so start each session first. The boot log says how many it left down
+# (action=auto_start_disabled):
 #   curl -X POST -H "X-API-Key: $API_KEY" http://localhost:2785/api/sessions/{sessionId}/start
 # Check all sessions reconnected (id alongside status — the send below needs the id)
 curl -H "X-API-Key: $API_KEY" \
@@ -712,7 +713,9 @@ curl -H "X-API-Key: $API_KEY" http://localhost:2785/api/health
 
 > Restoring `sessions/` is required, not optional, when the rollback crosses a browser major upgrade (on
 > amd64, 0.23.5 moved Chrome for Testing from 146 to 153, 0.26.0 moves it to 156 and 0.29.0 moves it to 157; arm64
-> runs the chromium Debian shipped when each image was built), and the backup must predate the first start
+> runs the chromium Debian shipped when each image was built; a source install without
+> `PUPPETEER_EXECUTABLE_PATH` runs the Chrome Puppeteer downloads, which moved from 156 to 157 with Puppeteer
+> 25.17.0), and the backup must predate the first start
 > on the newer image; a daily backup taken after the upgrade does not qualify. An older Chrome silently
 > deletes the IndexedDB of a profile a newer Chrome has opened, which is where whatsapp-web.js keeps the
 > WhatsApp login. The symptom: every previously linked whatsapp-web.js session starts at a QR code instead

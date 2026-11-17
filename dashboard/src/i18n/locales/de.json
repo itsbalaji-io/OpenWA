@@ -77,6 +77,7 @@
     "edited": "Bearbeitet",
     "media": {
       "location": "Standort",
+      "contact": "Kontakt",
       "call": "Anruf",
       "callMissed": "Verpasster Anruf",
       "callVideo": "Videoanruf",
@@ -690,7 +691,7 @@
       "session.restriction": "Wenn WhatsApp das Konto einschränkt oder eine Einschränkung aufhebt",
       "presence.update": "Wenn ein abonnierter Chat online geht, tippt oder offline geht",
       "event.response": "Wenn ein Gast auf eine WhatsApp-Veranstaltung antwortet (Zusage, Absage, Vielleicht)",
-      "poll.vote": "Wenn jemand bei einer Umfrage Optionen auswählt oder abwählt (whatsapp-web.js)",
+      "poll.vote": "Wenn jemand bei einer Umfrage Optionen auswählt oder abwählt",
       "group.join": "Wenn Teilnehmer einer Gruppe beitreten oder hinzugefügt werden",
       "group.leave": "Wenn Teilnehmer eine Gruppe verlassen oder entfernt werden",
       "group.update": "Wenn sich Name, Beschreibung oder Einstellungen einer Gruppe ändern",

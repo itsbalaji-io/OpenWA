@@ -50,6 +50,7 @@ import {
   patchMatchingMessage,
   byMessageId,
   getMediaSrc,
+  isRenderableMessage,
   liveMessageMetadata,
   stripMentionDelimiters,
   unacknowledgedIncomingIds,
@@ -93,6 +94,7 @@ import ChatThread from '../components/chats/ChatThread';
 import ChatComposer, { type StagedAttachment } from '../components/chats/ChatComposer';
 import StatusMedia from '../components/chats/StatusMedia';
 import StatusComposeModal from '../components/chats/StatusComposeModal';
+import { pauseOtherMedia } from '../utils/mediaPlayback';
 import './Chats.css';
 
 // Quiet window for coalescing mark-as-read RPCs (see markReadCoalescer below).
@@ -100,6 +102,13 @@ const MARK_READ_DEBOUNCE_MS = 750;
 // Most messages the gateway takes in one read (MarkChatReadDto).
 const MARK_READ_MESSAGE_IDS_MAX = 100;
 const readKey = (sessionId: string, chatId: string) => `${sessionId}\u0000${chatId}`;
+
+function lastRenderableIndex(thread: ChatMessageView[]): number {
+  for (let i = thread.length - 1; i >= 0; i--) {
+    if (isRenderableMessage(thread[i])) return i;
+  }
+  return -1;
+}
 
 // How many privacy-id chats a typed number is looked for among, how many are asked about at once, and the least
 // time between two such groups. The engine answers one id per request, so searching the whole list would cost a
@@ -200,6 +209,17 @@ export function Chats() {
   const selectedSessionRef = useRef(selectedSessionId);
   const [loadingSessions, setLoadingSessions] = useState<boolean>(true);
 
+  // Stop previous media when playing any audio or video in the chats page
+  useEffect(() => {
+    const handlePlayCapture = (e: Event) => {
+      if (e.target instanceof HTMLMediaElement) {
+        pauseOtherMedia(e.target);
+      }
+    };
+    document.addEventListener('play', handlePlayCapture, true);
+    return () => document.removeEventListener('play', handlePlayCapture, true);
+  }, []);
+
   // Chats list
   const [chats, setChats] = useState<Chat[]>([]);
   // The session whose list `chats` holds, as listedSessionRef below says it, for rendering.
@@ -284,6 +304,10 @@ export function Chats() {
     enabled: Boolean(selectedSessionId) && channelsSupported && activeTab === 'channels',
   });
   const channelMessages = useChannelMessages(selectedSessionId, activeChannel?.id ?? null);
+  const visibleChannelMessages = useMemo(
+    () => (channelMessages.data ?? []).filter(m => Boolean(m.body) || m.hasMedia),
+    [channelMessages.data],
+  );
 
   // Status tab: both engines expose stored status content, so this query isn't engine-gated (unlike
   // channelsQuery above) — but it is tab-gated the same way, so selecting a session on another tab
@@ -408,12 +432,12 @@ export function Chats() {
   }, []);
 
   // Per-chat scroll-position memory + auto-scroll heuristic.
-  // Pass `messages.length > 0` as the loaded signal: it stays stable once the
-  // chat has any message (doesn't toggle per append) and covers both the
-  // first-fetch resolution and a WS-driven first message on a previously-empty
-  // chat. `loadingMessages` alone would miss the latter case.
+  // Pass `hasRenderableMessages` as the loaded signal: it stays stable once the
+  // chat has any visible message (doesn't toggle per append) and avoids treating
+  // a thread of only unrenderable `unknown` entries as loaded before a real bubble mounts.
   // The position is kept per thread, so the key carries the session: a group both numbers belong to has one chat
   // id and two threads, and the offset read in one is not a place in the other.
+  const hasRenderableMessages = useMemo(() => messages.some(isRenderableMessage), [messages]);
   const {
     containerRef: messagesContainerRef,
     onMessageAppended,
@@ -422,7 +446,7 @@ export function Chats() {
     onOlderMessagesRequested,
   } = useChatScrollPosition(
     activeChat ? `${selectedSessionId}:${activeChat.id}` : null,
-    messages.length > 0,
+    hasRenderableMessages,
     loadingOlderMessages,
   );
 
@@ -885,6 +909,8 @@ export function Chats() {
         activeChatId: canWrite ? activeChat?.id : undefined,
         // A location message's body is the (multi-KB) base64 map thumbnail; show a label instead.
         locationLabel: `📍 ${t('chats.media.location')}`,
+        // A contact message's body is the raw vCard; show a short label instead.
+        contactLabel: `👤 ${t('chats.media.contact')}`,
       };
       liveRowsRef.current.set(newMsg.chatId, chatsRequestRef.current);
       const { needsSidebarRefetch } = applyIncomingToChatList(chatsRef.current, newMsg, listOptions);
@@ -966,10 +992,13 @@ export function Chats() {
       let matchedCachedMessage = false;
       let revokedLastMessage = false;
       for (const [key, thread] of cachedSessionThreads(queryClient, event.sessionId, revoked)) {
-        matchedCachedMessage = true;
-        // The sidebar previews the newest row, so only deleting that one changes it.
-        if (key[2] === event.chatId && findRevokedIndex(thread, event) === thread.length - 1) {
-          revokedLastMessage = true;
+        const revokedIndex = findRevokedIndex(thread, event);
+        if (revokedIndex !== -1) {
+          matchedCachedMessage = true;
+          // The sidebar previews the newest visible row, so deleting that one changes it.
+          if (key[2] === event.chatId && revokedIndex === lastRenderableIndex(thread)) {
+            revokedLastMessage = true;
+          }
         }
         updateCachedMessages(queryClient, key, list => {
           const idx = findRevokedIndex(list, event);
@@ -1008,9 +1037,9 @@ export function Chats() {
         matchedCachedMessage = true;
         updateCachedMessages(queryClient, key, list => applyMessageEdit(list, event));
 
-        // Only editing the newest row changes the sidebar preview. Confirm the thread belongs to
+        // Only editing the newest visible row changes the sidebar preview. Confirm the thread belongs to
         // the event chat before touching that summary.
-        if (key[2] === event.chatId && editedIndex === thread.length - 1) editedLastMessage = true;
+        if (key[2] === event.chatId && editedIndex === lastRenderableIndex(thread)) editedLastMessage = true;
       }
       if (editedLastMessage) {
         setChats(previous =>
@@ -2364,13 +2393,13 @@ export function Chats() {
                       <MessageSquare size={32} />
                       <span>{t('chats.loadMessagesError')}</span>
                     </div>
-                  ) : (channelMessages.data ?? []).length === 0 ? (
+                  ) : visibleChannelMessages.length === 0 ? (
                     <div className="messages-empty">
                       <MessageSquare size={32} />
                       <span>{t('chats.noMessagesInChat')}</span>
                     </div>
                   ) : (
-                    (channelMessages.data ?? []).map(m => (
+                    visibleChannelMessages.map(m => (
                       <div key={m.id} className="message-bubble incoming">
                         {/* whatsapp-web.js flags a post's media but gives no URL for it. */}
                         {m.hasMedia &&

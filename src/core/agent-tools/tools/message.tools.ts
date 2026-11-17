@@ -119,16 +119,17 @@ const customLinkPreviewSchema = refuseUnknownArguments(
 
 /**
  * Mirrors the REST `linkPreview` field of the two routes that carry text (send-text, send-template). The engines
- * differ, and the description is all an agent has to go on: whatsapp-web.js builds a preview by default, Baileys
- * only when it is asked to.
+ * differ, and the description is all an agent has to go on: when omitted, the session's `linkPreview` default wins
+ * if set, otherwise whatsapp-web.js builds a preview by default and Baileys only when asked to.
  */
 const linkPreviewSchema = z
   .boolean()
   .optional()
   .describe(
-    'Controls the URL preview, and the engines differ. whatsapp-web.js builds one by default and false ' +
-      'suppresses it. On Baileys a preview is opt-in: true fetches the page and attaches one, while unset or ' +
-      'false sends none.',
+    'Controls the URL preview. When omitted, uses the session config `linkPreview` default if set, otherwise ' +
+      'the engine default. On whatsapp-web.js a preview is built by default and false suppresses it. On Baileys ' +
+      'a preview is opt-in: true fetches the page and attaches one, while false (or unset with no session ' +
+      'default) sends none.',
   );
 
 /**
@@ -196,8 +197,9 @@ export function messageTools(message: MessageService, idempotency?: SendIdempote
         'List persisted messages for a session, newest first, optionally filtered by chatId, sender, direction, ' +
         'type, message time or an exact message reference. Reads from the local DB. Page with limit and offset, or ' +
         'walk with after (the id of the last message of the previous page) so a message arriving mid-walk cannot ' +
-        'shift the window. A message with media carries it inline as base64, up to a per-response budget ' +
-        '(8 MiB by default), which makes a result large; pass inlineMedia false to get the rows without the media.',
+        'shift the window. A message with media is listed without its payload, an { omitted, sizeBytes } marker ' +
+        'in its place; pass inlineMedia true to get the payloads inline as base64, up to a per-response budget ' +
+        '(8 MiB by default), which makes a result very large.',
       tier: 'read',
       sessionScoped: true,
       inputSchema: z.object({
@@ -235,8 +237,8 @@ export function messageTools(message: MessageService, idempotency?: SendIdempote
           .boolean()
           .optional()
           .describe(
-            'Set false to leave inline media payloads out: each media row then keeps an { omitted, sizeBytes } ' +
-              'marker. Media is only available inline over MCP, so leave it unset when you need the bytes.',
+            'Set true to carry media payloads inline as base64, the only way to the bytes over MCP. Unset or ' +
+              'false, each media row keeps an { omitted, sizeBytes } marker instead.',
           ),
       }),
       handler: ({ sessionId, after, inlineMedia, ...filters }) =>
@@ -244,7 +246,9 @@ export function messageTools(message: MessageService, idempotency?: SendIdempote
           ...filters,
           // REST reads a blank cursor as absent, and an agent often fills every optional field.
           after: after?.trim() || undefined,
-          ...(inlineMedia === undefined ? {} : { inlineMedia }),
+          // Off unless asked for, where REST inlines by default: base64 is of no use to a model that reads the
+          // result as text, and one photo makes the page larger than an MCP client takes.
+          inlineMedia: inlineMedia === true,
         }),
     }),
     defineTool({

@@ -277,7 +277,7 @@ initialization deadline, without it.
 
 **Cause:** WhatsApp added a passkey (WebAuthn) step to its companion linking handshake for some
 accounts. That step is enforced server-side inside the linking frames, which live in the engine
-libraries; neither whatsapp-web.js 1.34.7 nor Baileys 7.0.0-rc14 implements it, and OpenWA passes the
+libraries; neither whatsapp-web.js 1.34.8 nor Baileys 7.0.0-rc14 implements it, and OpenWA passes the
 QR string and the pairing-code request straight through to those libraries. There is no OpenWA-side
 fix, and nothing on the client side changes the outcome: switching engine, using a pairing code instead
 of a QR, or presenting a different client identity (`BAILEYS_BROWSER_NAME` or otherwise) all end at the
@@ -467,7 +467,9 @@ credentials) and create it anew; or pin `WWEBJS_WEB_VERSION`.
 often inside WSL2 or a resource-constrained container while WhatsApp Web is still loading.
 
 **Cause:** whatsapp-web.js waits a fixed 30000ms for WhatsApp Web to finish its initial load before
-generating the QR. On a slow first boot that window can expire before the page is ready.
+generating the QR, and then up to the same time again for the page's connection to WhatsApp to open. On a
+slow first boot either window can expire before the page is ready. The start then answers `504` and the
+session is marked `failed` with the reason `auth timeout`.
 
 **Fix:** raise the boot/inject wait (milliseconds) with `WWEBJS_AUTH_TIMEOUT_MS`:
 
@@ -872,7 +874,7 @@ rm -rf node_modules/whatsapp-web.js && npm ci
   `<status>` stanzas (the status-ack patch is missing, or is the 0.30.1 revision, which only
   acknowledged them)
 
-**Cause:** OpenWA applies fifteen exact source transforms to its engine libraries at install time
+**Cause:** OpenWA applies fourteen exact source transforms to its engine libraries at install time
 (docs/29 §29.3). The Docker image runs them without `--best-effort`, so a source shape a patcher
 cannot recognise fails the image build. Source installs run the Puppeteer compatibility transform
 without best-effort too, because browser teardown depends on it. The other transforms use
@@ -1632,7 +1634,7 @@ available_events:
   - session.restriction # WhatsApp restricted the account, or lifted it (payload: sessionId, active, kind, code, expiresAt)
   - presence.update # A subscribed chat's presence changed (Baileys only; the subscribe route answers 501 on whatsapp-web.js; payload: sessionId, chatId, participants, groupOnlineCount)
   - event.response # A guest answered a WhatsApp event invitation (Baileys only; payload: sessionId, eventMessageId, chatId, responderId, response, responseMessageId, timestamp)
-  - poll.vote # A voter selected or cleared options on a poll (whatsapp-web.js only; payload: sessionId, pollMessageId, chatId, voterId, selectedOptions, pollName, timestamp, timestampMs)
+  - poll.vote # A voter selected or cleared options on a poll (Baileys requires the poll creation message in the session store; payload: sessionId, pollMessageId, chatId, voterId, selectedOptions, pollName, timestamp, timestampMs)
   - call.accepted # A ringing call was answered (Baileys only; payload: sessionId, callId, from, outcome, isVideo, isGroup, timestamp)
   - call.rejected # A ringing call was declined (Baileys only)
   - call.missed # A ringing call was never picked up (Baileys only)

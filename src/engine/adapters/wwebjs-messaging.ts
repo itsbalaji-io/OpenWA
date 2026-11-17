@@ -19,7 +19,15 @@ import { BadRequestException, NotImplementedException } from '@nestjs/common';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
-import { chatKind, parseWaId, toNeutralJid, toParticipantWid, userPart } from '../identity/wa-id';
+import {
+  SERIALIZED_MESSAGE_ID,
+  chatKind,
+  parseWaId,
+  rememberChatOfPage,
+  toNeutralJid,
+  toParticipantWid,
+  userPart,
+} from '../identity/wa-id';
 import {
   chatHistoryMediaBudgetBytes,
   coerceDeclaredSize,
@@ -27,7 +35,7 @@ import {
   ingestMediaBudgetBytes,
   isMediaDownloadEnabled,
 } from './inbound-media-cap';
-import { buildIncomingMessageBase, mapContactFields } from './message-mapper';
+import { buildIncomingMessageBase, mapContactFields, wwebjsBody } from './message-mapper';
 import { buildVCard } from './vcard';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
@@ -37,6 +45,7 @@ import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.
 import { type WwebjsEngineHost, requireClient, withPage } from './wwebjs-host';
 import { PAGE_RELOADING_MESSAGE, isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
 import { recoverGroupChatById } from './wwebjs-chats';
+import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
 import { noteVideoLoadTimeout } from './wwebjs-video-load-timeout';
 
 /**
@@ -109,7 +118,8 @@ export interface PageMediaDownload {
  * WhatsApp serves, and upstream base64-encodes and ships whatever it decrypts, so an understated
  * `fileLength` brought an arbitrarily large string over the protocol into Node. An over-cap payload
  * comes back with its size and no data. `undefined` and `null` keep upstream's meaning: no usable
- * media.
+ * media. whatsapp-web.js 1.34.8 reads the blob from WhatsApp Web's own cache instead
+ * (`WWebJS.resolveMediaBlob`); this keeps the decrypt, which is what lets it measure before encoding.
  */
 export async function downloadMediaInPage(args: {
   msgId: string;
@@ -376,13 +386,6 @@ function ensureSendable(chatId: string, shape: 'reply' | 'location' | 'contact c
     );
   }
 }
-
-/**
- * A full serialized message id: `<fromMe>_<chat>_<id>`, plus one more segment on some messages (the sender of
- * a group message, or `out` on an own 1:1 message). Client.getMessageById parses the chat part in the page and
- * throws an unnamed error (a 500) for anything else, so this is checked before the page is asked.
- */
-const SERIALIZED_MESSAGE_ID = /^(?:true|false)_[^_@]+@[^_@]+_[^_]+(?:_[^_]+)?$/;
 
 /**
  * Messaging operations extracted from WhatsAppWebJsAdapter: the send paths (with the @c.us -> @lid
@@ -1138,6 +1141,7 @@ export class WwebjsMessaging {
     // Chat.fetchMessages only caps the page when `limit > 0` (Chat.js), so a 0/negative/NaN limit fails
     // OPEN and returns every loaded message. Substitute the default, as getChannelMessages does.
     const safeLimit = Number.isFinite(limit) && limit >= 1 ? Math.trunc(limit) : 50;
+    let chatWid: string | undefined;
     const messages = await this.withPage('getChatHistory', async () => {
       const chat = await this.client()
         .getChatById(chatId)
@@ -1148,9 +1152,13 @@ export class WwebjsMessaging {
       if (!chat) {
         return [];
       }
+      chatWid = readWid(chat.id);
       return chat.fetchMessages({ limit: safeLimit });
     });
     const results: IncomingMessage[] = [];
+    // The chat can be asked for by phone number and held by WhatsApp Web under the lid: say which, for the
+    // caller that matches the page to stored rows.
+    if (chatWid) rememberChatOfPage(results, chatWid);
     // Aggregate base64 budget across the whole pass: the per-message cap bounds ONE blob, but without
     // an aggregate bound a 100-message history could stack ~100 × 50 MiB into one response. Once the
     // running total crosses the budget, later media messages get the declared-only `omitted` marker —
@@ -1175,12 +1183,26 @@ export class WwebjsMessaging {
       if (signal?.aborted) {
         break;
       }
+      // Drop system notices and unlisted contentless entries before any page lookup (contact, quote, media).
+      if (isNotice(msg, this.host.logger) || isUnlistedContentless(msg, this.host.logger)) {
+        continue;
+      }
       // Reuse the shared mapper so history messages carry the same author/contact
       // enrichment as live incoming messages (#223). The mapper defaults chatId to
       // msg.from, which is wrong here (history includes fromMe messages whose `from`
       // is our own number), so override it to the requested chat and recompute the
       // chatId-derived flags (isGroup, isStatusBroadcast, kind) from the real chat.
       const out = buildIncomingMessageBase(msg);
+      if (msg.type === MessageTypes.REVOKED) {
+        // WhatsApp Web lists a deleted message under the id of the delete notice, not the id the message
+        // had, so a consumer holding the original could not match the two. The notice names the original
+        // in `protocolMessageKey`; report that id, and keep the entry's own when the key is absent.
+        const originalKey = (msg as unknown as { protocolMessageKey?: SerializedWid | string }).protocolMessageKey;
+        const originalId = readWid(originalKey);
+        if (originalId) {
+          out.id = originalId;
+        }
+      }
       out.chatId = chatId;
       out.isGroup = chatId.endsWith('@g.us');
       out.isStatusBroadcast = chatId === 'status@broadcast';
@@ -1224,7 +1246,7 @@ export class WwebjsMessaging {
       if (msg.hasQuotedMsg) {
         try {
           const quoted = await msg.getQuotedMessage();
-          out.quotedMessage = { id: quoted.id._serialized, body: quoted.body };
+          out.quotedMessage = { id: quoted.id._serialized, body: wwebjsBody(quoted) };
         } catch (error) {
           this.host.logger.warn(`Failed to resolve quoted message for ${msg.id._serialized}: ${String(error)}`);
         }

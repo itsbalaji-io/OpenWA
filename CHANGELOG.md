@@ -7,9 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- MCP: every tool is advertised with a `title`, the name a client shows: the tool name split into words, or the `title` its descriptor sets (#2098). Thanks @sudipta-prodevs.
+- MCP: `MCP_MAX_RESULT_BYTES`, an opt-in cap for clients that put a whole tool result in the model's context. When set, every result is one text item, cut at that many bytes with a note of its full size, and none is offloaded as a base64 resource; unset or `0`, the default, changes nothing (#2100). Thanks @sudipta-prodevs.
+
+### Changed
+
+- whatsapp-web.js: block and unblock use the library's own LID handling, so an unblock no longer clears an entry the same person holds under a second id, such as a phone-keyed block from before the LID migration. The install-time block patch is retired.
+- The MCP `MessageList` tool lists a media message without its payload unless the call sets `inlineMedia: true`, where it carried the base64 inline up to the 8 MiB budget, so one photo made the result larger than an MCP client takes.
+- Dashboard: a document in a chat shows as a card with its file name, its size where known and a PDF mark, and a click still downloads it; one left out of the message list showed only `Media` (#2105). Thanks @mbdali.
+
 ### Fixed
 
+- Dashboard: starting an audio or video message pauses the one already playing, where both kept playing at once (#2106). Thanks @mbdali.
+- Baileys: `POST /api/sessions/{sessionId}/chats/read` sets the chat's `unreadCount` back to `0` and undoes an unread mark set by `chats/unread`; the count used to stay, so the dashboard's unread badge came back on every reload (#2109). Thanks @juanbracamonte.
+- Dashboard: a shared contact shows as a card with its name and phone, in the thread, the chat list and a quoted reply, where the raw `BEGIN:VCARD` text was printed (#2110). Thanks @juanbracamonte.
+- whatsapp-web.js: several contacts shared in one message arrive with their vCards newline-joined in `body`, as on Baileys, where the body was empty; the chat list preview and a quote of such a message carry them too.
+- Baileys: `POST /api/sessions/{sessionId}/chats/read` resets a chat's `unreadCount` only when the receipt names the chat's newest received message; a read of older messages or of the account's own, or one a newer message overtook, used to zero the count of a chat that still had unread messages. An unread mark undone on one record of a chat is cleared on its other record too, where it made every later read write the mark again.
+- MCP: under `MCP_MAX_RESULT_BYTES` an error answer is cut at the cap too; a refusal that lists every invalid value of a wide argument came back whole, several times the cap. A cap larger than a number holds exactly is no longer read as no cap.
+- whatsapp-web.js: block and unblock ask WhatsApp for a number's privacy id when the page holds none, so a number the session never talked to can be blocked; a number WhatsApp holds no id for answers `400`, where an unblock answered `500`.
+
+### Documentation
+
+- Say in the `limit` description of the MCP tools that answer a bare list (`SessionFindAll`, `SessionGetChats`, `ContactFindAll`, `GroupFindAll`, `WebhooksList`) that a call returns at most 1000 rows, also when `limit` is omitted, so a full page may not be the whole list.
+
+### Dependencies
+
+- Update `whatsapp-web.js` to 1.34.8, which carries the message-id fix OpenWA backported, the media-id fix and a LID-aware block and unblock; the ready-sync patch now keeps only the `eventsAttached` marker.
+- Update `@aws-sdk/client-s3` to 3.1168.0, `bullmq` to 6.7.6, `@bull-board/api`, `@bull-board/express` and `@bull-board/nestjs` to 9.13.1, `typeorm` to 1.1.3, `puppeteer` to 25.17.0, `dotenv` to 18.0.10 and the `@nestjs` packages to 11.2.10 in the gateway.
+- Update `better-sqlite3` to 13.1.1 in the gateway, which bundles SQLite 3.54.1.
+- Update `i18next` to 27.1.1, `react-i18next` to 18.0.1 and `lucide-react` to 1.72.0 in the dashboard bundle. react-i18next 18 ignores `shouldUnescape`, so the API key confirmation no longer passes it.
+- Update `vite` to 8.3.8, `@vitejs/plugin-react` to 6.3.0 and `jsdom` to 31.0.1 in the dashboard, `prettier` to 3.10.1 and `typescript-eslint` to 8.72.2 in the gateway and the dashboard, and `concurrently` to 10.0.7 and `supertest` to 7.3.2 in the gateway; these are build, lint and test tooling only.
+- Update `guzzlehttp/guzzle` to 8.5.0 in the PHP SDK lockfile; this touches development and test setups only.
+
+### Upgrade notes (behavior changes)
+
+- An MCP `MessageList` call that does not set `inlineMedia` returns each media message with an `{ omitted, sizeBytes }` marker in place of its payload, where it returned the base64 inline; pass `inlineMedia: true` to get the bytes. `GET /api/sessions/{sessionId}/messages` still inlines by default.
+- A source install that runs the Chrome Puppeteer downloads (no `PUPPETEER_EXECUTABLE_PATH`) moves from Chrome 156 to 157 with Puppeteer 25.17.0, so a rollback to 0.30.3 or earlier crosses a browser major and deletes the stored whatsapp-web.js logins unless `sessions/` is restored from a backup taken before the first start on this release (see `docs/11-operational-runbooks.md`); the images pin their own browser and do not change, and Baileys sessions are unaffected.
+
+## [0.30.3] - 2026-11-16
+
+### Added
+
+- Session config key `linkPreview`: the default for a `send-text` or `send-template` that sets neither `linkPreview` nor `customLinkPreview`; a value in the request wins (#2080). Thanks @arraisfilho.
+- List the `linkPreview` session config key in the JavaScript, Python, Go and Java SDK types.
+- whatsapp-web.js: log the raw type of a message kept as an empty `unknown` (`wwebjs_keep_unmapped`, at `LOG_LEVEL=debug`), so a kind the gateway does not map can be named.
+- Log how many linked sessions stay disconnected because `AUTO_START_SESSIONS` is off, and how to start them: at boot, and when a session a vanished node left behind is marked disconnected (`action=auto_start_disabled`) (#2082). Thanks @arraisfilho.
+
+### Fixed
+
+- A `message:sending` plugin that rewrites a `send-text` to carry both `linkPreview: false` and `customLinkPreview` now gets the `400` the same request gets directly; Baileys sent it with the preview.
+- whatsapp-web.js: the header of an album no longer arrives as an empty `unknown` message, live, in the chat history or as a chat's last message; its photos and videos arrive as their own messages, as on Baileys (#2076).
+- whatsapp-web.js: the chat history (REST, MCP and plugin reads) returns a message deleted for everyone under the id of its stored row when its delete notice names the chat, or in a group the author, in the other id form (phone number or lid) and the gateway knows the two to be one person (#2076).
+- Dashboard: a message deleted for everyone is shown once when its history entry and its stored row name the chat or the author in different id forms, phone number and lid (#2076).
+- `PATCH /sessions/{sessionId}/config` no longer writes the characters of a string or the items of an array back as keys when the stored config is JSON but not an object, as a restored backup can hold.
+
+## [0.30.2] - 2026-11-15
+
+### Added
+
+- Report poll votes as `poll.vote` on Baileys, as whatsapp-web.js already does. A vote is read while the poll's creation message is still in the session's message store (`BAILEYS_MESSAGE_STORE_LIMIT`); earlier votes are not backfilled (#2063). Thanks @Shreyas1702003 for the report.
+
+### Fixed
+
+- whatsapp-web.js: an entry WhatsApp Web keeps in a chat that nobody sent (a group or security notice, or a kind the library does not list that carries neither text nor media) is no longer stored or announced as an `unknown` message, returned by the chat history, seeded as an empty status or reported as a chat's last message (#2076). Thanks @OneArmArmy for the report.
+- whatsapp-web.js: the chat history returns a message deleted for everyone under the id the message had, where it returned the id of the delete notice, so it no longer shows beside its stored copy (#2076).
+- whatsapp-web.js: `GET /sessions/{sessionId}/channels/{channelId}/messages` no longer returns a deleted channel update as an entry with an empty `body` (#2077). Thanks @OneArmArmy for the report.
+- Dashboard: a message deleted for everyone is shown once in the chat window of a whatsapp-web.js session, where the stored row and WhatsApp Web's own placeholder for it were both drawn (#2076).
+- Dashboard: an entry with nothing to show no longer draws an empty bubble: an `unknown` message with no text, media or quote in the chat window, or a channel update with neither text nor media in the Channels tab (#2076, #2077).
+- Dashboard: a message known only from WhatsApp Web's history no longer shows read ticks, since the history carries no delivery status.
+- `ctx.mappings.get` and `ctx.mappings.getByProvider` report the handover a plugin instance holds for a chat across its `@lid` and phone rows (`human`, else `closed`, else `bot`), so a plugin reading one row no longer misses a takeover recorded under the other.
 - Store the contact statuses WhatsApp delivers to some Baileys accounts as a top-level `<status>` stanza, which 0.30.1 acknowledged and dropped: `scripts/patch-baileys-status-ack.js` now decodes a stanza shaped as the status message it replaces, so it reaches the status list and the `status.received` webhook. A status that fails to decrypt is dropped, not retried (#2064). Thanks @damar-glh for the report.
+- A Baileys message or status that decrypts only in part and is left with no content is no longer stored or announced as an empty `unknown` message, so a redelivery that carries the content is not skipped as a duplicate.
+- A status the account posted is no longer listed among contact statuses on Baileys when WhatsApp names its poster by the account's lid.
+- Cap `poll.vote` at 32 `selectedOptions` of 1024 characters each and `pollName` at 1024 characters on both engines, as an inbound poll already is.
+- Read a contact's encrypted edit or reaction on Baileys when its key names one party by lid and the other by phone number without the alternate id, using the pairing the session already holds.
 
 ## [0.30.1] - 2026-11-14
 

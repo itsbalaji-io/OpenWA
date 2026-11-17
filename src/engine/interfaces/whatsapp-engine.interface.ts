@@ -751,11 +751,13 @@ export interface PollVoteEvent {
   /** Neutral id of the voter (the account itself when it voted from its phone). */
   voterId: string;
   /**
-   * The option texts now selected, exactly as they appear on the poll (the same strings `vote-poll`
-   * takes). An option the engine could not name is left out.
+   * The option texts now selected, capped to 32 options of 1024 characters like poll creation options
+   * (the same strings `vote-poll` takes when within WhatsApp's limits). Baileys drops the whole vote
+   * when any option hash does not match the poll; whatsapp-web.js omits individual unnamed options and
+   * skips a non-empty vote only when none can be named.
    */
   selectedOptions: string[];
-  /** The poll's question, when the creation message is available to read it from. */
+  /** The poll's question, when the creation message is available (truncated to 1024 characters). */
   pollName?: string;
   /** Unix seconds the voter changed the selection (sender clock). */
   timestamp: number;
@@ -1072,7 +1074,7 @@ export interface EngineEventCallbacks {
   onEventResponse?: (event: EventResponseEvent) => void;
   /**
    * Fired each time a voter changes their selection on a poll (consumers emit `poll.vote`).
-   * whatsapp-web.js only: Baileys never fires it.
+   * Baileys requires the poll creation message (and its secret) to remain in the session message store.
    */
   onPollVote?: (event: PollVoteEvent) => void;
   /**
@@ -1269,7 +1271,8 @@ export interface MessagingCapability {
    *
    * `linkPreview: false` suppresses the URL preview on BOTH engines. Otherwise the two differ:
    * whatsapp-web.js builds one in-page by default, while on Baileys a preview is OPT-IN — only
-   * `linkPreview: true` produces one, because generating it is a blocking outbound fetch per URL.
+   * `linkPreview: true` produces one, because generating it is a blocking outbound fetch of the
+   * first URL in the text.
    */
   sendTextMessage(
     chatId: string,
@@ -1779,6 +1782,10 @@ export interface ChatCapability {
    *
    * `authors` maps a message id to who posted it, for a group: a receipt names its sender, and an id the
    * engine never kept (history backfill) has no key to read it from. An id with neither is not acknowledged.
+   *
+   * Once a receipt that names the chat's newest received message is out, Baileys resets the unread count
+   * it lists the chat with, and undoes an unread mark set by hand. The answer reports the receipt alone: a
+   * mark that cannot be undone is logged.
    */
   sendSeen(
     chatId: string,

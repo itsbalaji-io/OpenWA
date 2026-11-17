@@ -213,6 +213,52 @@ test('a document sent by URL opens in a new tab instead of navigating the dashbo
   assert.equal(inline.getAttribute('download'), 'inline.pdf');
 });
 
+test('a document shows as a card with its name and size, whether the page holds it or has to fetch it', () => {
+  const media = (id: string, type: ChatMessageView['type'], info: Record<string, unknown>): ChatMessageView => ({
+    ...PROMPT,
+    id,
+    waMessageId: `wamid.${id}`,
+    body: '',
+    type,
+    metadata: { media: { mimetype: 'application/pdf', filename: `${id}.pdf`, ...info } },
+  });
+  const { container } = renderThread('operator', [
+    media('held', 'document', { data: 'JVBERi0=' }),
+    media('left-out', 'document', { omitted: true, sizeBytes: 2 * 1024 * 1024 }),
+    media('sheet', 'document', {
+      omitted: true,
+      sizeBytes: 3072,
+      mimetype: 'application/vnd.ms-excel',
+      filename: 'sheet.xls',
+    }),
+    media('photo', 'image', { omitted: true, sizeBytes: 3072, mimetype: 'image/jpeg', filename: 'photo.jpg' }),
+  ]);
+  const card = (id: string) => container.querySelector(`[data-wa-message-id="wamid.${id}"] .chat-document-card`);
+  const text = (id: string, part: string) => card(id)?.querySelector(`.chat-document-${part}`)?.textContent;
+
+  // Held by the page: the card is the link that downloads it. No size is known for it, so only the kind is named.
+  assert.equal(card('held')?.tagName, 'A');
+  assert.equal(card('held')?.getAttribute('download'), 'held.pdf');
+  assert.equal(text('held', 'title'), 'held.pdf');
+  assert.equal(text('held', 'meta'), 'PDF');
+
+  // Left out of the list: the card is the button that fetches it, and carries the size the marker gave.
+  assert.equal(card('left-out')?.tagName, 'BUTTON');
+  assert.equal(text('left-out', 'title'), 'left-out.pdf');
+  assert.equal(text('left-out', 'meta'), '2 MB \u2022 PDF');
+
+  // Not a PDF: no PDF mark, the size alone.
+  assert.equal(text('sheet', 'title'), 'sheet.xls');
+  assert.equal(text('sheet', 'meta'), '3 KB');
+  assert.equal(card('sheet')?.querySelector('.chat-document-pdf-tag'), null);
+
+  // Media that is not a document keeps its plain label.
+  const photo = container.querySelector('[data-wa-message-id="wamid.photo"] button.message-media-omitted');
+  assert.ok(photo);
+  assert.equal(photo.classList.contains('chat-document-card'), false);
+  assert.equal(photo.querySelector('.chat-document-title'), null);
+});
+
 test('archive-only media previews inline from the media route; a plain omitted marker and a document keep the button', async () => {
   // MESSAGE_INLINE_MEDIA=archive leaves `{ omitted, archived }` on the row: the image rendered inline
   // before, so it must still. The over-budget marker (no `archived`) must not fetch on render, and a
@@ -2122,4 +2168,199 @@ test('a media download whose retry is answered after sign-out saves no file', as
       assert.deepEqual(saved, [], 'the media file was saved after the sign-out');
     },
   );
+});
+
+test('outgoing history message without status draws no tick or undefined class while stored message keeps them', () => {
+  const histOutgoing: ChatMessageView = {
+    ...PROMPT,
+    id: 'hist-out',
+    waMessageId: 'true_15551234567@c.us_HIST',
+    from: '15559990000@c.us',
+    to: CHAT.id,
+    body: 'from phone history',
+    direction: 'outgoing',
+    status: undefined,
+    metadata: undefined,
+  };
+  const storedOutgoing: ChatMessageView = {
+    ...histOutgoing,
+    id: 'db-out',
+    waMessageId: 'true_15551234567@c.us_DB',
+    body: 'from stored db',
+    status: 'sent',
+    timestamp: PROMPT.timestamp! + 60,
+  };
+  const { container } = renderThread('operator', [histOutgoing, storedOutgoing]);
+
+  const histWrapper = container.querySelector('[data-wa-message-id="true_15551234567@c.us_HIST"]')!;
+  const histBubble = histWrapper.querySelector('.message-bubble')!;
+  const histSpacer = histWrapper.querySelector('.meta-spacer')!;
+  assert.equal(histWrapper.querySelector('.message-status-icon') === null, true);
+  assert.equal(histSpacer.classList.contains('with-status'), false);
+  assert.equal(histBubble.classList.contains('undefined'), false);
+  assert.ok(histWrapper.querySelector('.delete-btn'), 'outgoing history row with waMessageId stays deletable');
+
+  const dbWrapper = container.querySelector('[data-wa-message-id="true_15551234567@c.us_DB"]')!;
+  assert.ok(dbWrapper.querySelector('.message-status-icon.sent'));
+  assert.equal(dbWrapper.querySelector('.meta-spacer')?.classList.contains('with-status'), true);
+});
+
+test('empty unknown rows render nothing and preserve grouping, day pills, tab stop, and empty state', () => {
+  const groupChat: Chat = {
+    ...CHAT,
+    id: '120363000000000001@g.us',
+    name: 'Group',
+    isGroup: true,
+    kind: 'group',
+  };
+  const baseTs = 1_700_000_000;
+  const rows: ChatMessageView[] = [
+    {
+      ...PROMPT,
+      id: 'g-1',
+      waMessageId: 'wamid.g1',
+      chatId: groupChat.id,
+      from: groupChat.id,
+      author: 'alice@c.us',
+      chatName: 'Alice',
+      body: 'first from alice',
+      timestamp: baseTs,
+      metadata: undefined,
+    },
+    {
+      ...PROMPT,
+      id: 'unk-same-day',
+      waMessageId: 'wamid.unk.1',
+      chatId: groupChat.id,
+      from: groupChat.id,
+      author: 'bob@c.us',
+      chatName: 'Bob',
+      type: 'unknown',
+      body: '',
+      timestamp: baseTs + 30,
+      metadata: undefined,
+    },
+    {
+      ...PROMPT,
+      id: 'g-2',
+      waMessageId: 'wamid.g2',
+      chatId: groupChat.id,
+      from: groupChat.id,
+      author: 'alice@c.us',
+      chatName: 'Alice',
+      body: 'second from alice',
+      timestamp: baseTs + 60,
+      metadata: undefined,
+    },
+    {
+      ...PROMPT,
+      id: 'unk-own-day',
+      waMessageId: 'wamid.unk.2',
+      chatId: groupChat.id,
+      from: groupChat.id,
+      author: 'bob@c.us',
+      chatName: 'Bob',
+      type: 'unknown',
+      body: '',
+      timestamp: baseTs + 86_400,
+      metadata: undefined,
+    },
+    {
+      ...PROMPT,
+      id: 'g-3',
+      waMessageId: 'wamid.g3',
+      chatId: groupChat.id,
+      from: 'me',
+      to: groupChat.id,
+      direction: 'outgoing',
+      status: 'read',
+      body: 'my reply',
+      timestamp: baseTs + 2 * 86_400,
+      metadata: undefined,
+    },
+    {
+      ...PROMPT,
+      id: 'unk-tail',
+      waMessageId: 'wamid.unk.3',
+      chatId: groupChat.id,
+      from: groupChat.id,
+      author: 'bob@c.us',
+      chatName: 'Bob',
+      type: 'unknown',
+      body: '',
+      timestamp: baseTs + 2 * 86_400 + 30,
+      metadata: undefined,
+    },
+  ];
+
+  const { container } = renderThread('operator', rows, groupChat);
+  const wrappers = Array.from(container.querySelectorAll('.message-bubble-wrapper'));
+  assert.deepEqual(
+    wrappers.map(w => w.getAttribute('data-wa-message-id')),
+    ['wamid.g1', 'wamid.g2', 'wamid.g3'],
+  );
+  assert.equal(container.querySelectorAll('.day-separator').length, 2, 'empty unknown on its own day draws no pill');
+  assert.ok(wrappers[0].querySelector('.message-sender')?.textContent === 'Alice');
+  assert.equal(wrappers[0].classList.contains('run-start'), true);
+  assert.equal(
+    wrappers[1].querySelector('.message-sender') === null,
+    true,
+    'same sender run continues past skipped unknown row',
+  );
+  assert.equal(wrappers[1].classList.contains('run-start'), false);
+  const roving = wrappers[2].querySelector<HTMLElement>('[data-roving-message]');
+  assert.equal(roving?.getAttribute('tabindex'), '0', 'trailing skipped unknown row must not steal roving tabIndex');
+
+  rtl.cleanup();
+  const { container: onlyUnknown } = renderThread('operator', [
+    { ...PROMPT, id: 'only-unk', waMessageId: 'wamid.onlyunk', type: 'unknown', body: '', metadata: undefined },
+  ]);
+  assert.equal(onlyUnknown.querySelectorAll('.message-bubble-wrapper').length, 0);
+  assert.ok(
+    onlyUnknown
+      .querySelector('.messages-empty')
+      ?.textContent?.includes('No messages yet. Send the first message to get started!'),
+  );
+});
+
+test('unknown rows with renderable content plus revoked and masked rows still render bubbles', () => {
+  const rows: ChatMessageView[] = [
+    {
+      ...PROMPT,
+      id: 'u-body',
+      waMessageId: 'wamid.ubody',
+      type: 'unknown',
+      body: 'readable fallback',
+      metadata: undefined,
+    },
+    {
+      ...PROMPT,
+      id: 'u-media',
+      waMessageId: 'wamid.umedia',
+      type: 'unknown',
+      body: '',
+      metadata: { media: { mimetype: 'application/pdf', omitted: true } },
+    },
+    {
+      ...PROMPT,
+      id: 'u-quote',
+      waMessageId: 'wamid.uquote',
+      type: 'unknown',
+      body: '',
+      metadata: { quotedMessage: { id: 'q1', body: 'quoted' } },
+    },
+    {
+      ...PROMPT,
+      id: 'u-btn',
+      waMessageId: 'wamid.ubtn',
+      type: 'unknown',
+      body: '',
+      direction: 'incoming',
+      metadata: { buttons: [{ id: 'b1', text: 'Tap' }] },
+    },
+    { ...PROMPT, id: 'rev-1', waMessageId: 'wamid.rev1', type: 'revoked', body: '', metadata: undefined },
+    { ...PROMPT, id: 'mask-1', waMessageId: 'wamid.mask1', type: 'masked', body: '', metadata: undefined },
+  ];
+  const { container } = renderThread('operator', rows);
+  assert.equal(container.querySelectorAll('.message-bubble').length, 6);
 });
