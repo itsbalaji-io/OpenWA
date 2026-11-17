@@ -135,6 +135,13 @@ export interface IncomingMessage {
   author?: string;
   /** WIDs @mentioned in the message (empty/absent when none). Surfaced for command targeting. */
   mentionedIds?: string[];
+  /**
+   * True when the sender forwarded this message rather than writing it. Absent (never `false`) for a
+   * message that was not forwarded, so consumers can treat the key's presence as the signal.
+   */
+  isForwarded?: boolean;
+  /** How many times the message has been forwarded; WhatsApp flags a widely forwarded one at 5 or more. Set with `isForwarded`. */
+  forwardingScore?: number;
   /** Set for `call` (call_log) messages: video vs voice, and whether an incoming call went unanswered. */
   call?: { video: boolean; missed: boolean };
   /**
@@ -821,13 +828,17 @@ export interface IncomingCallEvent {
  *  - `tos_block` / `proxy_block` (whatsapp-web.js) — a connection-level refusal: WhatsApp Web drops
  *    the socket and the engine cannot stay linked at all. Derived from the `WAState` the library
  *    reports on its `disconnected` event, which is the only channel that carries it.
+ *  - `passkey_required` (Baileys): WhatsApp wants a passkey (a WebAuthn assertion) before it completes
+ *    a link, and the engine cannot produce one, so the link never completes. Reported when the
+ *    `passkey_prologue_request` notification arrives, which happens after the scan or the pairing code
+ *    and before any status change: the session keeps showing its QR.
  *
  * That difference is load-bearing for clearing: a `reachout_timelock` can only be resolved by an
  * explicit lift signal, whereas a connection-scoped kind is disproved the moment the session reaches
  * READY again — the block would have prevented that.
  */
 export interface AccountRestriction {
-  kind: 'reachout_timelock' | 'tos_block' | 'proxy_block';
+  kind: 'reachout_timelock' | 'tos_block' | 'proxy_block' | 'passkey_required';
   /**
    * The engine's own token for the cause, kept verbatim so an operator can search for it and so a
    * new upstream value is surfaced rather than flattened: the `WAState` string on whatsapp-web.js
@@ -962,6 +973,31 @@ export interface InboundReceipt {
   settled: Promise<InboundOutcome | undefined>;
 }
 
+/**
+ * How far a connection had got when it closed. The close code alone does not say: a `428` is what a
+ * session waiting for its QR, a login WhatsApp never answered and a session that had been open for a
+ * day all report.
+ * - `connecting`: the connection to WhatsApp never opened: no network, a failing proxy, a refused upgrade or
+ *   the connecting deadline. Nothing was exchanged, so it says nothing about the login.
+ * - `registration`: no device is linked; the connection was waiting for a QR scan or a pairing code.
+ * - `linked`: the link was accepted on this connection. WhatsApp then asks for a restart (close 515).
+ * - `login_unconfirmed`: the connection opened, a linked device's login was sent and WhatsApp had not confirmed it.
+ * - `login_confirmed`: WhatsApp confirmed the login and the session had not opened yet. In between the
+ *   engine stores and uploads its pre-keys and activates the connection.
+ * - `open`: the session was open.
+ */
+export type ConnectionCloseStage =
+  'connecting' | 'registration' | 'linked' | 'login_unconfirmed' | 'login_confirmed' | 'open';
+
+/** What the engine knows about the connection whose close a reconnect attempt follows. */
+export interface ReconnectContext {
+  stage: ConnectionCloseStage;
+  /** The close's status code, when it carried one. */
+  statusCode?: number;
+  /** How long the closed connection had existed, in milliseconds. */
+  aliveMs: number;
+}
+
 export interface EngineEventCallbacks {
   onQRCode?: (qr: string) => void;
   onReady?: (phone: string, pushName: string) => void;
@@ -1075,11 +1111,13 @@ export interface EngineEventCallbacks {
    * needs to tell a one-second blip from a session that has been down for an hour, which the status
    * alone cannot: the engine reports INITIALIZING for the whole episode, exactly as it does for a
    * session that has never been paired.
+   * `context` describes the connection whose close led to this attempt. It is absent when the attempt
+   * follows a connect that failed before a connection existed.
    *
    * Optional: an engine that hands every drop to its consumer instead of retrying internally
    * (whatsapp-web.js does) simply never invokes this, because that consumer already has the drop.
    */
-  onReconnecting?: (attempt: number, nextDelayMs: number) => void;
+  onReconnecting?: (attempt: number, nextDelayMs: number, context?: ReconnectContext) => void;
   onStateChanged?: (state: EngineStatus) => void;
   /**
    * Fired when the engine needs an operator action to keep the session healthy — currently only the
