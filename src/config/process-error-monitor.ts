@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream';
 import { incrementUnhandledRejections } from '../common/metrics/process-error-metrics';
 
 /** Minimal structured-logger surface the monitor needs (satisfied by createLogger()'s result). */
@@ -135,3 +136,36 @@ export function ignoreLostOutput(
     });
   }
 }
+
+/**
+ * Keep abandoned or aborted web streams (ReadableStream from fetch / undici converted via Readable.fromWeb)
+ * from crashing the process with an unhandled 'error' event.
+ *
+ * When an inbound media download or HTTP stream is abandoned (e.g. MEDIA_DOWNLOAD_TIMEOUT_MS elapsed, or
+ * MEDIA_DOWNLOAD_MAX_BYTES cap exceeded), the downstream consumer stops reading or destroys its transform.
+ * The underlying undici HTTP/2 connection eventually closes in the background, emitting an aborted fetch
+ * error (UND_ERR_RES_CONTENT_LENGTH_MISMATCH / TypeError: terminated). Because Node.js stream.pipe() does
+ * not handle source errors, an unconsumed Readable instance without an 'error' listener throws synchronously
+ * inside emit('error'), becoming a fatal uncaughtException.
+ *
+ * Attaching an error handler to Readable.fromWeb instances ensures background abortions on abandoned
+ * HTTP response streams do not terminate the process, while still allowing callers with explicit
+ * error listeners or for-await iterations to receive operational errors.
+ */
+export function guardFromWebStreams(): void {
+  const origFromWeb = (Readable as unknown as { fromWeb?: (stream: unknown, options?: unknown) => Readable }).fromWeb;
+  if (typeof origFromWeb === 'function' && !(origFromWeb as unknown as { __guarded?: boolean }).__guarded) {
+    const guardedFromWeb = function (webStream: unknown, options?: unknown): Readable {
+      const stream = origFromWeb.call(Readable, webStream, options);
+      if (stream && typeof stream.on === 'function') {
+        stream.on('error', () => {
+          /* absorb late stream errors on abandoned fetch response bodies */
+        });
+      }
+      return stream;
+    };
+    (guardedFromWeb as unknown as { __guarded: boolean }).__guarded = true;
+    (Readable as unknown as { fromWeb: unknown }).fromWeb = guardedFromWeb;
+  }
+}
+
