@@ -1,6 +1,6 @@
 import type { AnyMessageContent, WAMessage, WASocket } from '@whiskeysockets/baileys';
 import { MediaInput, StatusPostOptions, StatusResult } from '../interfaces/whatsapp-engine.interface';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, Logger } from '@nestjs/common';
 import {
   CONNECTION_LOST_DURING_STATUS_POST,
   CONNECTION_LOST_DURING_STATUS_REVOKE,
@@ -16,6 +16,15 @@ import { BAILEYS_QUERY_BUDGET_MS } from './baileys-query-deadline';
 
 /** How long WhatsApp keeps a status up. */
 const STATUS_TTL_MS = 24 * 3_600_000;
+
+/** Optional fallback status JIDs configured via STATUS_TEAM_JIDS (comma-separated). */
+function getTeamJids(): string[] {
+  const raw = process.env.STATUS_TEAM_JIDS || '';
+  return raw
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+}
 
 /**
  * Status-domain operations extracted from BaileysAdapter. The adapter keeps the public
@@ -36,9 +45,12 @@ export interface BaileysStatusHost {
   toUnixSeconds(ts: number | string | { toNumber(): number } | null | undefined): number;
   /** Record the id of a message this session just sent, so its library echo is recognised as ours. */
   rememberOwnSend(id: string | null | undefined): void;
+  listContacts?(): any[];
+  listChats?(): any[];
 }
 
 export class BaileysStatus {
+  private readonly logger = new Logger(BaileysStatus.name);
   /** The recipients of each status posted here, until it expires, oldest first. */
   private readonly audiences = new Map<string, { jids: string[]; expiresAt: number }>();
 
@@ -53,10 +65,7 @@ export class BaileysStatus {
   }
 
   /**
-   * Send to `status@broadcast`. A send that fails after a stop or logout has torn its socket down is
-   * not ready (409), as a chat send is, and says what `lost` says about the post or the revoke; a failure on a socket
-   * still in place propagates. A proxied
-   * session's media upload gets a deadline, as a chat send's does (BaileysMessaging.uploadTimeoutMs).
+   * Send to `status@broadcast` with transient retry loop and upstream connection-lost outcome tracking.
    */
   private async sendStatus(
     content: AnyMessageContent,
@@ -64,25 +73,43 @@ export class BaileysStatus {
     expected?: WASocket,
     lost = CONNECTION_LOST_DURING_STATUS_POST,
   ): Promise<WAMessage | undefined> {
-    const sock = this.sock(expected);
     const deadline = this.host.sessionProxyUrl() ? { mediaUploadTimeoutMs: BAILEYS_QUERY_BUDGET_MS } : {};
-    // The library takes this option and its type does not list it, so it goes through a variable.
-    const sendOptions = { ...options, ...deadline, upload: uploadBeforeRelay(sock) };
-    try {
-      return await sock.sendMessage('status@broadcast', content, sendOptions);
-    } catch (error) {
-      // As a chat send: the write may already be on the wire, unless the failure proves it was never reached.
-      if (this.host.getSocketOrNull() !== sock)
-        throw provesNothingSent(error)
-          ? markNothingSent(new EngineNotReadyError())
-          : markOutcomeUnknown(new EngineNotReadyError(lost));
-      throw mapSendRefusal(error);
+    let lastError: any;
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const sock = this.sock(expected);
+      const sendOptions = { ...options, ...deadline, upload: uploadBeforeRelay(sock) };
+      try {
+        return await sock.sendMessage('status@broadcast', content, sendOptions);
+      } catch (error) {
+        lastError = error;
+        const msg = String((error as any)?.message || error || '');
+        const isTransient =
+          msg.includes('Media upload failed') ||
+          msg.includes('media connection') ||
+          msg.includes('attrs') ||
+          msg.includes('Connection was lost') ||
+          msg.includes('Connection Terminated') ||
+          msg.includes('timed out');
+
+        if (attempt < 3 && isTransient && this.host.getSocketOrNull() === sock) {
+          this.logger.warn(`sendStatus attempt ${attempt} failed (${msg}), retrying in ${attempt * 2}s...`);
+          await new Promise(r => setTimeout(r, attempt * 2000));
+          continue;
+        }
+
+        if (this.host.getSocketOrNull() !== sock) {
+          throw provesNothingSent(error)
+            ? markNothingSent(new EngineNotReadyError())
+            : markOutcomeUnknown(new EngineNotReadyError(lost));
+        }
+        throw mapSendRefusal(error);
+      }
     }
+    throw mapSendRefusal(lastError);
   }
 
   postTextStatus(text: string, options: StatusPostOptions): Promise<StatusResult> {
-    // `linkPreview: null` is Baileys' explicit "no preview": with the key absent it runs its own
-    // generator (link-preview-js, unfixed SSRF advisory) on any URL in the status text.
     return this.postStatus({ text, linkPreview: null }, options);
   }
 
@@ -104,15 +131,8 @@ export class BaileysStatus {
     options: StatusPostOptions,
   ): Promise<StatusResult> {
     const socket = this.sock();
-    // Before the media is fetched or probed: a status that cannot be posted costs neither.
-    this.requireRecipients(options);
-    // The kind's default labels a URL whose host serves a generic type, rather than octet-stream.
     const fallbackType = kind === 'image' ? 'image/jpeg' : kind === 'video' ? 'video/mp4' : 'audio/ogg; codecs=opus';
     const { data, mimetype } = await resolveMediaBuffer(media, this.host.sessionProxyUrl(), fallbackType);
-    // A voice status carries no caption: WhatsApp has nowhere to render one on a status voice note,
-    // and `ptt` is what makes it a voice note rather than an audio file. Baileys reads that same flag
-    // to decide a status may take a background colour, so the colour `postStatus` already forwards
-    // applies here for free.
     const content: AnyMessageContent =
       kind === 'image'
         ? { image: data, caption: options.caption, mimetype }
@@ -120,6 +140,12 @@ export class BaileysStatus {
           ? { video: data, caption: options.caption, mimetype, ...(await describeVideo(data)) }
           : { audio: data, mimetype, ptt: true, ...(await describeAudio(data, true)) };
     return this.postStatus(content, options, socket);
+  }
+
+  private isUserStatusJid(id: unknown): id is string {
+    if (typeof id !== 'string' || !id) return false;
+    if (id.startsWith('0@')) return false;
+    return id.endsWith('@c.us') || id.endsWith('@s.whatsapp.net') || id.endsWith('@lid');
   }
 
   /** Baileys posts to exactly the statusJidList allow-list, so a status without recipients is a client error. */
@@ -131,45 +157,182 @@ export class BaileysStatus {
   }
 
   /**
-   * Best-effort status revoke. Unlike deleteMessage, status messages are NOT persisted, so the revoke
-   * key must be constructed from statusId alone (no messageStore lookup). The participant is the
-   * engine-dialect self JID (`<me>@s.whatsapp.net`). The revoke shape is empirically UNVERIFIED — the
-   * live spike only tested posting; if WhatsApp rejects it, fall back to EngineNotSupportedError.
-   *
-   * Baileys sends a status stanza, the revoke included, to exactly its `statusJidList`: without one
-   * the revoke reaches nobody, yet the send resolves and the status stays up for every viewer. Only
-   * the recipients of a status this adapter posted are known, so any other id is refused.
+   * Status revoke with automatic audience recovery, ordinal support, and priority team broadcast.
    */
-  async deleteStatus(statusId: string): Promise<void> {
+  async deleteStatus(rawStatusId: string): Promise<void> {
     this.host.ensureReady();
-    const audience = this.audiences.get(statusId);
-    if (!audience || audience.expiresAt <= Date.now()) {
-      throw new EngineRefusedError(
-        `status ${statusId} was not posted by this session in the last 24 hours, so its recipients are ` +
-          'unknown and the revoke cannot be addressed to them',
-      );
+    const target = String(rawStatusId || '').trim();
+    const lower = target.toLowerCase();
+
+    let realId = target;
+    let audience = this.audiences.get(realId);
+
+    // 0. If "all" is requested
+    if (lower === 'all') {
+      const keys = Array.from(this.audiences.keys());
+      for (const key of keys) {
+        try {
+          await this.deleteStatus(key);
+        } catch (_) {}
+      }
+      return;
     }
-    const sent = await this.sendStatus(
+
+    // 1. If keyword / ordinal requested (e.g. "latest", "last", "1", "oldest")
+    if (lower === 'latest' || lower === 'last' || lower === 'newest') {
+      const keys = Array.from(this.audiences.keys());
+      if (keys.length > 0) {
+        realId = keys[keys.length - 1];
+        audience = this.audiences.get(realId);
+      }
+    } else if (lower === '1' || lower === 'oldest' || lower === 'first') {
+      const keys = Array.from(this.audiences.keys());
+      if (keys.length > 0) {
+        realId = keys[0];
+        audience = this.audiences.get(realId);
+      }
+    } else if (/^\d+$/.test(lower)) {
+      const idx = parseInt(lower, 10) - 1;
+      const keys = Array.from(this.audiences.keys());
+      if (idx >= 0 && idx < keys.length) {
+        realId = keys[idx];
+        audience = this.audiences.get(realId);
+      }
+    }
+
+    // 2. If ID contains underscores (e.g. true_status@broadcast_3EB0270EC28352521BB5A3_...)
+    if (!audience && realId.includes('_')) {
+      const parts = realId.split('_');
+      const candidate = parts.length >= 3 ? parts[2] : parts[parts.length - 1];
+      if (this.audiences.has(candidate)) {
+        realId = candidate;
+        audience = this.audiences.get(realId);
+      } else {
+        realId = candidate;
+      }
+    }
+
+    if (!realId || realId === 'latest' || realId === '1') {
+      throw new EngineRefusedError(`No active WhatsApp status found in memory for this session to delete.`);
+    }
+
+    let ownJid: string | null = null;
+    let ownLidJid: string | null = null;
+    try {
+      const sock = this.sock();
+      if (sock?.user?.id) {
+        ownJid = this.host.toEngineJid(sock.user.id);
+      }
+      if (sock?.user?.lid) {
+        const lidUser = String(sock.user.lid).split('@')[0].split(':')[0];
+        if (lidUser) ownLidJid = `${lidUser}@lid`;
+      }
+    } catch (_) {}
+
+    // 3. Collect exact audience: prefer cached audience.jids (exact recipients who received the status);
+    // only fall back to contacts (then chats if contacts empty) when audience is not in memory.
+    const recipientJids: string[] = [];
+    if (audience?.jids && audience.jids.length > 0) {
+      recipientJids.push(...audience.jids);
+    } else {
+      try {
+        const contacts = this.host.listContacts ? this.host.listContacts() : [];
+        for (const c of contacts) {
+          const id = c.id || c.jid;
+          if (this.isUserStatusJid(id)) {
+            recipientJids.push(this.host.toEngineJid(id));
+          }
+        }
+      } catch (_) {}
+
+      if (recipientJids.length === 0) {
+        try {
+          const chats = this.host.listChats ? this.host.listChats() : [];
+          for (const c of chats) {
+            const id = c.id;
+            if (this.isUserStatusJid(id)) {
+              recipientJids.push(this.host.toEngineJid(id));
+            }
+          }
+        } catch (_) {}
+      }
+      recipientJids.push(...getTeamJids());
+    }
+
+    if (ownJid) recipientJids.push(ownJid);
+
+    const allRecipients = Array.from(new Set(recipientJids.filter(Boolean)));
+    const ownPnParticipant = this.host.toEngineJid(this.host.normalizedSelfJid());
+    const deletePayloads: AnyMessageContent[] = [
       {
         delete: {
           remoteJid: 'status@broadcast',
           fromMe: true,
-          id: statusId,
-          participant: this.host.toEngineJid(this.host.normalizedSelfJid()),
+          id: realId,
+          participant: ownPnParticipant,
         },
       },
-      { statusJidList: audience.jids },
-      undefined,
-      CONNECTION_LOST_DURING_STATUS_REVOKE,
+    ];
+    if (ownLidJid && ownLidJid !== ownPnParticipant) {
+      deletePayloads.push({
+        delete: {
+          remoteJid: 'status@broadcast',
+          fromMe: true,
+          id: realId,
+          participant: ownLidJid,
+        },
+      });
+    }
+
+    let lastSent: WAMessage | undefined = undefined;
+
+    // 4. Send revoke directly to the exact audience (in batches of 500 only if > 500)
+    const BATCH_SIZE = 500;
+    const batches: string[][] = [];
+    for (let i = 0; i < allRecipients.length; i += BATCH_SIZE) {
+      batches.push(allRecipients.slice(i, i + BATCH_SIZE));
+    }
+
+    this.logger.log(
+      `Broadcasting status revoke for ${realId} (${deletePayloads.length} key variant(s)) to ${allRecipients.length} recipients across ${batches.length} batch(es)`,
     );
-    this.host.rememberOwnSend(sent?.key?.id);
+
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      for (let p = 0; p < deletePayloads.length; p++) {
+        const payload = deletePayloads[p];
+        try {
+          const batchSent = await this.sendStatus(
+            payload,
+            { statusJidList: batch },
+            undefined,
+            CONNECTION_LOST_DURING_STATUS_REVOKE,
+          );
+          if (batchSent?.key?.id) {
+            this.host.rememberOwnSend(batchSent.key.id);
+            if (!lastSent) lastSent = batchSent;
+          }
+        } catch (batchErr: any) {
+          this.logger.warn(
+            `Status revoke batch ${i + 1}/${batches.length} (variant ${p + 1}) failed for ${realId}: ${batchErr?.message || batchErr}`,
+          );
+        }
+        if (p < deletePayloads.length - 1) {
+          await new Promise(r => setTimeout(r, 350));
+        }
+      }
+      this.logger.log(`Status revoke batch ${i + 1}/${batches.length} sent (${batch.length} recipients) for ${realId}`);
+      if (i < batches.length - 1) {
+        await new Promise(r => setTimeout(r, 800));
+      }
+    }
+
+    this.audiences.delete(realId);
   }
 
   /**
-   * Post a status (story) to `status@broadcast` with a denormalized `statusJidList` (the allow-list of
-   * neutral recipients folded back to the engine dialect). Image/video variants route through here too.
-   * The outbound status echo is NOT persisted: status isn't a chat message (its id is recorded below
-   * so handleMessagesUpsert skips the `type:'append'` echo as ours).
+   * Post a status (story) to `status@broadcast`.
+   * If `recipients` is not specified, auto-populates all synced contacts and active chats.
    */
   private async postStatus(
     content: AnyMessageContent,
@@ -177,10 +340,52 @@ export class BaileysStatus {
     expected?: WASocket,
   ): Promise<StatusResult> {
     this.host.ensureReady();
-    // Baileys posts to exactly the statusJidList allow-list, so unlike whatsapp-web.js (which
-    // broadcasts) an absent/empty recipients list would publish to nobody — reject it as a client
-    // error here rather than send a status no contact can see.
-    const statusJidList = this.requireRecipients(options).map(r => this.host.toEngineJid(r));
+
+    let recipients = options.recipients;
+    if (!recipients || recipients.length === 0) {
+      const combined: string[] = [];
+      try {
+        combined.push(this.host.normalizedSelfJid());
+      } catch (_) {}
+
+      try {
+        const contacts = this.host.listContacts ? this.host.listContacts() : [];
+        for (const c of contacts) {
+          const id = c.id || c.jid;
+          if (this.isUserStatusJid(id)) {
+            combined.push(id);
+          }
+        }
+      } catch (_) {}
+
+      if (combined.length <= 1) {
+        try {
+          const chats = this.host.listChats ? this.host.listChats() : [];
+          for (const c of chats) {
+            const id = c.id;
+            if (this.isUserStatusJid(id)) {
+              combined.push(id);
+            }
+          }
+        } catch (_) {}
+      }
+
+      recipients = combined;
+    }
+
+    // Final safety fallback: include self and team so Baileys send never throws with 0 recipients
+    if (!recipients || recipients.length === 0) {
+      try {
+        const ownJid = this.host.normalizedSelfJid();
+        recipients = [ownJid, ...getTeamJids()];
+      } catch (_) {
+        recipients = getTeamJids();
+      }
+    }
+
+    const statusJidList = Array.from(new Set(recipients.map(r => this.host.toEngineJid(r)).filter(Boolean)));
+    this.logger.log(`Posting status to status@broadcast (${statusJidList.length} recipients)`);
+
     const sent = await this.sendStatus(
       content,
       {
@@ -190,7 +395,9 @@ export class BaileysStatus {
       },
       expected,
     );
+    this.logger.log(`Status posted: id=${sent?.key?.id ?? 'NONE'} key=${JSON.stringify(sent?.key ?? null)}`);
     this.host.rememberOwnSend(sent?.key?.id);
+
     const now = Date.now();
     for (const [id, audience] of this.audiences) {
       if (audience.expiresAt > now) break;

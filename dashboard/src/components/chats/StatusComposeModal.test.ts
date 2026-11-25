@@ -181,6 +181,7 @@ test('a contact list that stays throttled reads as a failure, not an empty addre
 test('status text and caption are bounded by Post, not truncated by UTF-16 units', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   render();
+  fireEvent.click(screen.getByRole('button', { name: 'Text' }));
   const post = screen.getByRole('button', { name: 'Post' }) as HTMLButtonElement;
   const text = document.getElementById('scm-1') as HTMLTextAreaElement;
   assert.equal(text.hasAttribute('maxlength'), false);
@@ -241,6 +242,7 @@ const fontOptions = () =>
 test('the font picker names every id after the protocol, on Baileys', async () => {
   emptyContacts = true;
   render('baileys');
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Text' }));
   // Let the contact read land first: an answer arriving after the next test's cache clear leaves a timer behind.
   await rtl.screen.findByText('No contacts found');
   assert.deepEqual(fontOptions(), [
@@ -258,6 +260,7 @@ test('the font picker names every id after the protocol, on Baileys', async () =
 
 test('whatsapp-web.js is not offered the ids it posts in the default font', () => {
   render('whatsapp-web.js');
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Text' }));
   assert.deepEqual(
     fontOptions().map(([value]) => value),
     ['', '0', '1', '2', '6', '7'],
@@ -267,6 +270,7 @@ test('whatsapp-web.js is not offered the ids it posts in the default font', () =
 test('a picked font is posted under its own id', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   render();
+  fireEvent.click(screen.getByRole('button', { name: 'Text' }));
   fireEvent.change(document.getElementById('scm-1') as HTMLTextAreaElement, { target: { value: 'hello' } });
   fireEvent.change(document.getElementById('scm-3') as HTMLSelectElement, { target: { value: '2' } });
   fireEvent.click(screen.getByRole('button', { name: 'Post' }));
@@ -280,9 +284,9 @@ test('the status kind toggle says which kind is chosen', () => {
   render();
   const text = screen.getByRole('button', { name: 'Text' });
   const image = screen.getByRole('button', { name: 'Image' });
-  assert.equal(text.getAttribute('aria-pressed'), 'true', 'the chosen kind is not exposed as pressed');
-  assert.equal(image.getAttribute('aria-pressed'), 'false');
-  fireEvent.click(image);
-  assert.equal(image.getAttribute('aria-pressed'), 'true');
+  assert.equal(image.getAttribute('aria-pressed'), 'true', 'the chosen kind is not exposed as pressed');
   assert.equal(text.getAttribute('aria-pressed'), 'false');
+  fireEvent.click(text);
+  assert.equal(text.getAttribute('aria-pressed'), 'true');
+  assert.equal(image.getAttribute('aria-pressed'), 'false');
 });

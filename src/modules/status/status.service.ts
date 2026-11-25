@@ -1,7 +1,10 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import type { Readable } from 'stream';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { StatusStoreService } from '../status-store/status-store.service';
+import { Session } from '../session/entities/session.entity';
 import { StorageService, isMissingObjectError } from '../../common/storage/storage.service';
 import type { Status, StatusResult, StatusPostOptions } from '../../engine/interfaces/whatsapp-engine.interface';
 import { assertBase64WithinMediaCap, resolveMediaBody, stripBase64DataUri } from '../message/media-cap.util';
@@ -39,6 +42,9 @@ export class StatusService {
     private readonly store: StatusStoreService,
     private readonly storageService: StorageService,
     private readonly pacing: SendPacingService,
+    @Optional()
+    @InjectRepository(Session, 'data')
+    private readonly sessionRepo?: Repository<Session>,
   ) {}
 
   /**
@@ -153,13 +159,102 @@ export class StatusService {
     }
   }
 
+  private async resolveOwnStatusJid(sessionId: string): Promise<string> {
+    if (this.sessionRepo) {
+      const session = await this.sessionRepo.findOne({ where: { id: sessionId } }).catch(() => null);
+      const digits = session?.phone?.replace(/\D/g, '');
+      if (digits) return `${digits}@c.us`;
+    }
+    return 'me@c.us';
+  }
+
+  private async recordOwnPostedStatus(
+    sessionId: string,
+    result: StatusResult,
+    details: {
+      type: 'text' | 'image' | 'video' | 'voice';
+      caption?: string;
+      backgroundColor?: string;
+      font?: number;
+      media?: { mimetype: string; data: string };
+    },
+  ): Promise<void> {
+    if (!result?.statusId) return;
+    try {
+      const contactJid = await this.resolveOwnStatusJid(sessionId);
+      const isBase64 = details.media && !isMediaUrl(details.media.data);
+      await this.store.ingest(sessionId, {
+        waStatusId: result.statusId,
+        contactJid,
+        contactName: 'My Status',
+        type: details.type,
+        caption: details.caption,
+        backgroundColor: details.backgroundColor,
+        font: details.font,
+        media:
+          details.media && isBase64
+            ? { mimetype: details.media.mimetype, data: details.media.data }
+            : undefined,
+        postedAt: result.timestamp ? new Date(result.timestamp).getTime() : Date.now(),
+      });
+    } catch (err) {
+      this.logger.warn(`Failed to record own posted status ${result.statusId} in status store`, {
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async getMyStatuses(
+    sessionId?: string,
+  ): Promise<Array<Status & { sessionId: string; sessionName?: string; sessionPhone?: string }>> {
+    const sessions = this.sessionRepo
+      ? sessionId
+        ? await this.sessionRepo.find({ where: { id: sessionId } })
+        : await this.sessionRepo.find()
+      : sessionId
+        ? [{ id: sessionId, name: sessionId, phone: undefined }]
+        : [];
+
+    const collected: Array<Status & { sessionId: string; sessionName?: string; sessionPhone?: string }> = [];
+    for (const s of sessions) {
+      const seen = new Set<string>();
+      const digits = s.phone?.replace(/\D/g, '');
+      const candidates = Array.from(new Set([...(digits ? [`${digits}@c.us`] : []), 'me@c.us']));
+      for (const jid of candidates) {
+        const items = await this.store.listByContact(s.id, jid);
+        for (const item of items) {
+          if (seen.has(item.id)) continue;
+          seen.add(item.id);
+          collected.push({
+            ...item,
+            sessionId: s.id,
+            sessionName: s.name || s.id,
+            sessionPhone: s.phone || undefined,
+          });
+        }
+      }
+    }
+    collected.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return collected;
+  }
+
   async postTextStatus(sessionId: string, text: string, options: StatusPostOptions): Promise<StatusResult> {
     const engine = this.engines.require(
       sessionId,
       () => new NotFoundException(`Session ${sessionId} not found or not connected`),
     );
     const gated = await this.gate(sessionId, 'status-text', { text, options });
-    return this.recordedPost(sessionId, 'text', () => engine.postTextStatus(gated.text, gated.options));
+    const result = await this.recordedPost(sessionId, 'text', () =>
+      engine.postTextStatus(gated.text, gated.options),
+    );
+    await this.recordOwnPostedStatus(sessionId, result, {
+      type: 'text',
+      caption: gated.text,
+      backgroundColor: gated.options.backgroundColor,
+      font: gated.options.font,
+    });
+    return result;
   }
 
   async postImageStatus(
@@ -173,9 +268,16 @@ export class StatusService {
       () => new NotFoundException(`Session ${sessionId} not found or not connected`),
     );
     const gated = await this.gate(sessionId, 'status-image', { media: payload, options });
-    return this.recordedPost(sessionId, 'image', () =>
-      engine.postImageStatus(this.guardGatedMedia(gated.media), gated.options),
+    const guarded = this.guardGatedMedia(gated.media);
+    const result = await this.recordedPost(sessionId, 'image', () =>
+      engine.postImageStatus(guarded, gated.options),
     );
+    await this.recordOwnPostedStatus(sessionId, result, {
+      type: 'image',
+      caption: gated.options.caption,
+      media: guarded,
+    });
+    return result;
   }
 
   async postVideoStatus(
@@ -189,9 +291,16 @@ export class StatusService {
       () => new NotFoundException(`Session ${sessionId} not found or not connected`),
     );
     const gated = await this.gate(sessionId, 'status-video', { media: payload, options });
-    return this.recordedPost(sessionId, 'video', () =>
-      engine.postVideoStatus(this.guardGatedMedia(gated.media), gated.options),
+    const guarded = this.guardGatedMedia(gated.media);
+    const result = await this.recordedPost(sessionId, 'video', () =>
+      engine.postVideoStatus(guarded, gated.options),
     );
+    await this.recordOwnPostedStatus(sessionId, result, {
+      type: 'video',
+      caption: gated.options.caption,
+      media: guarded,
+    });
+    return result;
   }
 
   /**
@@ -215,9 +324,16 @@ export class StatusService {
       () => new NotFoundException(`Session ${sessionId} not found or not connected`),
     );
     const gated = await this.gate(sessionId, 'status-voice', { media: payload, options });
-    return this.recordedPost(sessionId, 'voice', () =>
-      engine.postVoiceStatus(this.guardGatedMedia(gated.media), gated.options),
+    const guarded = this.guardGatedMedia(gated.media);
+    const result = await this.recordedPost(sessionId, 'voice', () =>
+      engine.postVoiceStatus(guarded, gated.options),
     );
+    await this.recordOwnPostedStatus(sessionId, result, {
+      type: 'voice',
+      backgroundColor: gated.options.backgroundColor,
+      media: guarded,
+    });
+    return result;
   }
 
   async deleteStatus(sessionId: string, statusId: string): Promise<void> {
@@ -225,6 +341,10 @@ export class StatusService {
       sessionId,
       () => new NotFoundException(`Session ${sessionId} not found or not connected`),
     );
-    return engine.deleteStatus(statusId);
+    try {
+      await engine.deleteStatus(statusId);
+    } finally {
+      await this.store.remove(sessionId, statusId).catch(() => {});
+    }
   }
 }

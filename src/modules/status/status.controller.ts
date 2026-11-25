@@ -18,6 +18,18 @@ import {
 } from '../../common/openapi/engine-status-responses';
 
 @ApiTags('status')
+@Controller('status')
+export class MyStatusController {
+  constructor(private readonly statusService: StatusService) {}
+
+  @Get('mine')
+  @ApiOperation({ summary: 'Get all own synced WhatsApp statuses across sessions (phone + OpenWA)' })
+  async getAllMyStatuses() {
+    return { statuses: await this.statusService.getMyStatuses() };
+  }
+}
+
+@ApiTags('status')
 @Controller('sessions/:sessionId/status')
 export class StatusController {
   constructor(private readonly statusService: StatusService) {}
@@ -31,6 +43,12 @@ export class StatusController {
   })
   async getStatuses(@Param('sessionId') sessionId: string) {
     return { statuses: await this.statusService.getStatuses(sessionId) };
+  }
+
+  @Get('mine')
+  @ApiOperation({ summary: 'Get own synced WhatsApp statuses for this session (phone + OpenWA)' })
+  async getMyStatuses(@Param('sessionId') sessionId: string) {
+    return { statuses: await this.statusService.getMyStatuses(sessionId) };
   }
 
   // The segment is `:id` on both verbs because GET reads a contact's statuses and DELETE removes one

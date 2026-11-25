@@ -362,6 +362,29 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
     return rows.map(row => this.toStatus(row));
   }
 
+  async remove(sessionId: string, waStatusId: string): Promise<number> {
+    const rawId = waStatusId.includes('_') ? (waStatusId.split('_')[2] || waStatusId) : waStatusId;
+    const candidates = Array.from(new Set([waStatusId, rawId].filter(Boolean)));
+    const rows = await this.repository.find({
+      where: [
+        { sessionId, waStatusId: In(candidates) },
+        { waStatusId: In(candidates) },
+      ],
+    });
+    for (const row of rows) {
+      if (row.mediaPath) {
+        try {
+          await this.storageService.deleteFile(row.mediaPath);
+        } catch (_) {}
+      }
+    }
+    const result = await this.repository.delete([
+      { sessionId, waStatusId: In(candidates) },
+      { waStatusId: In(candidates) },
+    ]);
+    return result.affected ?? rows.length;
+  }
+
   /**
    * Canonical display form of a contact JID: resolve a @lid to its phone via the shared mapping.
    * Read-time (not ingest-time) on purpose: a mapping learned after the status arrived still merges

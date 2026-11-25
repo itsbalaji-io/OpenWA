@@ -1,0 +1,8 @@
+services:
+  openwa-api:
+    environment:
+      - BIND_HOST=0.0.0.0
+
+networks:
+  internal-docker:
+    internal: false

@@ -1,5 +1,7 @@
 import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
 import {
+  guardFromWebStreams,
   ignoreLostOutput,
   registerUncaughtExceptionMonitor,
   registerUnhandledRejectionHandler,
@@ -187,5 +189,19 @@ describe('ignoreLostOutput', () => {
         }
       });
     }
+  });
+});
+
+describe('guardFromWebStreams', () => {
+  it('attaches an error listener to Readable.fromWeb instances so aborted web streams do not throw unhandled error', () => {
+    guardFromWebStreams();
+    const webStream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(Buffer.from('hello'));
+      },
+    });
+    const readable = Readable.fromWeb(webStream as never);
+    expect(readable.listenerCount('error')).toBeGreaterThan(0);
+    expect(() => readable.emit('error', new Error('UND_ERR_RES_CONTENT_LENGTH_MISMATCH'))).not.toThrow();
   });
 });

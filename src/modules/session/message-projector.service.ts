@@ -848,12 +848,6 @@ export class MessageProjector {
 
   /** `isStatusBroadcast` arm of {@link handleInboundMessage}: ingest into the status store, not the message pipeline. */
   private ingestInboundStatus(id: string, engine: IWhatsAppEngine, message: IncomingMessage): Promise<void> {
-    // Status/Story posts arrive via the inbound path for some engines; ingest them into the
-    // status store instead of the message pipeline. Mirrors the isStatusBroadcast guard in
-    // onMessageCreate below: an own-send echo (fromMe) stays a plain drop — never ingested,
-    // never dispatched — so a status you posted never re-appears in your own webhooks/API as
-    // if a contact had posted it.
-    if (message.fromMe) return Promise.resolve();
     const status = buildIncomingStatus(message);
     if (!status) return Promise.resolve();
     return (
@@ -867,8 +861,8 @@ export class MessageProjector {
           // dispatch for a session that no longer exists (mirrors message.received's re-check).
           if (!this.engines.isLive(id, engine)) return;
           // One that expired while the ingest ran (a slow media write) is gone from every read: announcing it
-          // would point a consumer at a status the API no longer serves.
-          if (created && row.expiresAt > Date.now()) this.dispatchStatusReceived(id, row);
+          // would point a consumer at a status the API no longer serves. Only dispatch webhook for incoming peer statuses.
+          if (created && row.expiresAt > Date.now() && !message.fromMe) this.dispatchStatusReceived(id, row);
         })
         .catch(err =>
           this.logger.warn('Status ingest failed', {
@@ -1808,9 +1802,10 @@ export class MessageProjector {
       return;
     }
 
-    // Status/Story posts are account-created but not real conversations; don't emit `message.sent`
-    // for them. The adapter flags these (the engine-specific pseudo-JID stays out of this layer).
+    // Status/Story posts are account-created but not real conversations; ingest into the status
+    // store so phone-posted and OpenWA-posted statuses sync automatically, without emitting `message.sent`.
     if (message.isStatusBroadcast) {
+      void this.ingestInboundStatus(id, engine, message);
       return;
     }
 

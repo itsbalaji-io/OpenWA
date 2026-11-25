@@ -137,6 +137,8 @@ export function Sessions() {
   // engine exists, and a second click in that window is refused as "already starting" while the first
   // one proceeds.
   const [startingIds, setStartingIds] = useState<ReadonlySet<string>>(new Set());
+  const [isStartingAll, setIsStartingAll] = useState(false);
+  const [isStoppingAll, setIsStoppingAll] = useState(false);
   // Session config is not on the list payload — the API never returns the config column, so it is
   // fetched per session when the detail modal opens rather than N times to render the list.
   const [sessionConfig, setSessionConfig] = useState<SessionConfig | null>(null);
@@ -672,6 +674,71 @@ export function Sessions() {
     }
   };
 
+  const handleStartAll = async () => {
+    if (isStartingAll || isStoppingAll) return;
+    const stoppedSessions = sessions.filter(s => !isSessionStarted(s));
+    if (stoppedSessions.length === 0) {
+      toast.info('Sessions Active', 'All sessions are already active or connecting.');
+      return;
+    }
+    setIsStartingAll(true);
+    let successCount = 0;
+    let failCount = 0;
+    for (const session of stoppedSessions) {
+      try {
+        const started = await sessionApi.start(session.id);
+        rowWrites.current += 1;
+        updateSessions(current => replaceSession(current, started));
+        successCount++;
+      } catch (err) {
+        console.error(`Failed to start session ${session.id}:`, err);
+        failCount++;
+      }
+    }
+    await fetchSessions();
+    setIsStartingAll(false);
+    if (successCount > 0) {
+      toast.success(
+        'Connect All Complete',
+        `Initiated connection for ${successCount} session(s)${failCount > 0 ? ` (${failCount} failed)` : ''}.`,
+      );
+    } else {
+      toast.error('Connect All Failed', 'Could not initiate connection for stopped sessions.');
+    }
+  };
+
+  const handleStopAll = async () => {
+    if (isStartingAll || isStoppingAll) return;
+    const runningSessions = sessions.filter(s => isSessionStarted(s));
+    if (runningSessions.length === 0) {
+      toast.info('Sessions Inactive', 'All sessions are already stopped.');
+      return;
+    }
+    setIsStoppingAll(true);
+    let stopCount = 0;
+    let failCount = 0;
+    for (const session of runningSessions) {
+      try {
+        const updated = await sessionApi.stop(session.id);
+        await applySessionResponse(updated);
+        stopCount++;
+      } catch (err) {
+        console.error(`Failed to stop session ${session.id}:`, err);
+        failCount++;
+      }
+    }
+    await fetchSessions();
+    setIsStoppingAll(false);
+    if (stopCount > 0) {
+      toast.success(
+        'Stop All Complete',
+        `Successfully stopped ${stopCount} active session(s)${failCount > 0 ? ` (${failCount} failed)` : ''}.`,
+      );
+    } else {
+      toast.error('Stop All Failed', 'Could not stop active sessions.');
+    }
+  };
+
   const handleForceKill = async (id: string) => {
     // Same double-click guard as handleDelete.
     if (killingId) return;
@@ -810,6 +877,39 @@ export function Sessions() {
             ariaLabel={t('sessions.details.status')}
           />
         </div>
+
+        {canWrite && sessions.length > 0 && (
+          <div className="sessions-bulk-actions">
+            <button
+              type="button"
+              className="btn-bulk btn-bulk-start"
+              onClick={handleStartAll}
+              disabled={isStartingAll || isStoppingAll}
+              title="Start and connect all stopped sessions"
+            >
+              {isStartingAll ? (
+                <Loader2 size={15} className="animate-spin" />
+              ) : (
+                <Play size={15} />
+              )}
+              <span>Connect All</span>
+            </button>
+            <button
+              type="button"
+              className="btn-bulk btn-bulk-stop"
+              onClick={handleStopAll}
+              disabled={isStartingAll || isStoppingAll}
+              title="Stop all active sessions"
+            >
+              {isStoppingAll ? (
+                <Loader2 size={15} className="animate-spin" />
+              ) : (
+                <Square size={15} />
+              )}
+              <span>Stop All</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {error && (

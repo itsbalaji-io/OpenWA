@@ -825,11 +825,9 @@ export class BaileysEvents {
    */
   plannedMediaDownload(b: typeof BaileysLib | undefined, msg: WAMessage): boolean {
     if (!b) return true;
-    const ownStatusPost = msg.key.fromMe === true && msg.key.remoteJid === 'status@broadcast';
     const normalized = b.normalizeMessageContent(msg.message ?? undefined) ?? msg.message ?? undefined;
     return (
       isBaileysMediaType(contentTypeOf(normalized, b.getContentType)) &&
-      !ownStatusPost &&
       !this.dropsAsEphemeral(msg, extractBaileysContext(normalized ?? {}).ephemeralDuration) &&
       isMediaDownloadEnabled() &&
       coerceDeclaredSize(mediaSubMessage(normalized ?? {})?.fileLength) <= inboundMediaMaxBytes()
@@ -1087,9 +1085,10 @@ export class BaileysEvents {
       // conversation, so no `message.sent` is emitted for it. Downloading its media first is work
       // nothing consumes, and a story is a full-size photo or video. Everything else about the path
       // is kept, so the message is still recorded and still guards against a repeat delivery.
-      const ownStatusPost = msg.key.fromMe === true && remoteJid === 'status@broadcast';
+      // Status/Story posts (including own posts from the phone) keep their media downloaded so the
+      // WhatsApp Status viewer can display images/videos posted from either the phone or OpenWA.
       const incoming = await this.mapMessage(msg, contentType, {
-        skipMediaDownload: opts.skipMedia || ownStatusPost,
+        skipMediaDownload: opts.skipMedia,
         ticket: opts.ticket,
         yieldSlot: opts.yieldSlot,
       });
@@ -2184,10 +2183,11 @@ export class BaileysEvents {
     }
     const isSelf = this.selfMatcher();
     for (const { key, receipt } of Array.isArray(updates) ? updates : []) {
+      const isStatus = key?.remoteJid === 'status@broadcast' || chatKind(key?.remoteJid ?? '') === 'status';
       if (
         !key?.id ||
         !key.remoteJid ||
-        key.fromMe !== true ||
+        (key.fromMe !== true && !isStatus) ||
         !RECEIPT_CHAT_KINDS.has(chatKind(key.remoteJid)) ||
         !receipt?.userJid ||
         isSelf(receipt.userJid)

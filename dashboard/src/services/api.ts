@@ -1161,6 +1161,16 @@ export const sessionApi = {
       method: 'POST',
       body: JSON.stringify({ image, recipients, caption }),
     }),
+  postVideoStatus: (
+    id: string,
+    video: { url?: string; base64?: string; mimetype?: string } | string,
+    recipients?: string[],
+    caption?: string,
+  ) =>
+    request(`/sessions/${id}/status/send-video`, {
+      method: 'POST',
+      body: JSON.stringify({ video, recipients, caption }),
+    }),
 };
 
 // =============================================================================
@@ -1752,3 +1762,79 @@ export const statsApi = {
   getOverview: () => request<OverviewStats>('/stats/overview'),
   getMessages: (period: StatsPeriod) => request<MessageStats>(`/stats/messages?period=${enc(period)}`),
 };
+
+// =============================================================================
+// Status Broadcast API
+// =============================================================================
+
+export interface StatusContact {
+  id: string;
+  name?: string;
+  pushName?: string;
+}
+
+export interface StatusItem {
+  id: string;
+  contact?: StatusContact;
+  type?: 'image' | 'video' | 'audio' | 'text' | string;
+  from?: string;
+  participant?: string;
+  senderName?: string;
+  sessionId?: string;
+  sessionName?: string;
+  timestamp: number | string | Date;
+  expiresAt?: number | string | Date;
+  text?: string;
+  caption?: string;
+  mediaUrl?: string;
+  mimetype?: string;
+  backgroundColor?: string;
+  font?: number;
+  viewCount?: number;
+  viewers?: Array<{ jid: string; phone?: string; name?: string; viewedAt?: number }>;
+  isOwn?: boolean;
+}
+
+export interface PostStatusOptions {
+  recipients?: string[];
+  backgroundColor?: string;
+  font?: number;
+  caption?: string;
+}
+
+export interface MyStatusItem extends StatusItem {
+  sessionId: string;
+  sessionName?: string;
+  sessionPhone?: string;
+}
+
+export const statusApi = {
+  getStatuses: (sessionId: string) =>
+    request<{ statuses: StatusItem[] }>(`/sessions/${encodeURIComponent(sessionId)}/status`),
+  getMyStatuses: (sessionId?: string) =>
+    request<{ statuses: MyStatusItem[] }>(
+      sessionId ? `/sessions/${encodeURIComponent(sessionId)}/status/mine` : '/status/mine',
+    ),
+  postText: (sessionId: string, text: string, options?: PostStatusOptions) =>
+    request<{ statusId: string }>(`/sessions/${encodeURIComponent(sessionId)}/status/send-text`, {
+      method: 'POST',
+      body: JSON.stringify({ text, ...options }),
+    }),
+  postImage: (sessionId: string, imageBase64OrUrl: string, caption?: string, recipients?: string[]) =>
+    request<{ statusId: string }>(`/sessions/${encodeURIComponent(sessionId)}/status/send-image`, {
+      method: 'POST',
+      body: JSON.stringify({ image: imageBase64OrUrl, caption, recipients }),
+    }),
+  postVideo: (sessionId: string, videoBase64OrUrl: string, caption?: string, recipients?: string[]) =>
+    request<{ statusId: string }>(`/sessions/${encodeURIComponent(sessionId)}/status/send-video`, {
+      method: 'POST',
+      body: JSON.stringify({ video: videoBase64OrUrl, caption, recipients }),
+    }),
+  deleteStatus: (sessionId: string, statusId: string) =>
+    request<{ message: string }>(`/sessions/${encodeURIComponent(sessionId)}/status/${encodeURIComponent(statusId)}`, {
+      method: 'DELETE',
+    }),
+  getMediaUrl: (sessionId: string, statusId: string) =>
+    `${API_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/status/${encodeURIComponent(statusId)}/media`,
+};
+

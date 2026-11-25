@@ -45,6 +45,7 @@ import {
 import { SESSION_STORE_MAP_CAP_DEFAULT, type BaileysSessionStore } from './baileys-session-store';
 import { ownAccountIds } from './baileys-stored-chat-previews.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
+import { guardFromWebStreams } from '../../config/process-error-monitor';
 import { chatKind, userPart } from '../identity/wa-id';
 
 /**
@@ -244,6 +245,27 @@ const newSocketProgress = (loggingIn: boolean) => ({
 });
 
 /**
+ * Ensure the installed @whiskeysockets/baileys messages-media.js closes the source HTTP stream
+ * when the decryptor Transform stream closes (e.g. on timeout or cap), and handles errors on the
+ * source stream so unconsumed response aborts cannot emit an unhandled 'error' event.
+ */
+function ensureBaileysMediaStreamPatched(baileysDir?: string): boolean {
+  try {
+    const dir = baileysDir ?? path.dirname(require.resolve('@whiskeysockets/baileys/package.json'));
+    const file = path.join(dir, 'lib', 'Utils', 'messages-media.js');
+    if (!fs.existsSync(file)) return false;
+    const content = fs.readFileSync(file, 'utf8');
+    const target = 'return fetched.pipe(output, { end: true });';
+    if (!content.includes(target) || content.includes('output.on(\'close\'')) return false;
+    const replacement = `fetched.on('error', (error) => {\n        if (!output.destroyed) {\n            output.destroy(error);\n        }\n    });\n    output.on('close', () => {\n        if (!fetched.destroyed) {\n            fetched.destroy();\n        }\n    });\n    return fetched.pipe(output, { end: true });`;
+    fs.writeFileSync(file, content.replace(target, replacement), 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Connection lifecycle extracted from BaileysAdapter: connect/reconnect with capped backoff, QR
  * rendering, logout with the remove-companion-device ACK, terminal-close handling, and the state
  * behind them (sock, status, reconnect counters, the lazily-loaded library). The adapter keeps the
@@ -385,6 +407,8 @@ export class BaileysLifecycle {
 
   /** Lazily loaded @whiskeysockets/baileys module (ESM-only; loaded on first connect, not at boot). */
   async loadLib(): Promise<typeof BaileysLib> {
+    guardFromWebStreams();
+    ensureBaileysMediaStreamPatched();
     return (this.lib ??= await import('@whiskeysockets/baileys'));
   }
 

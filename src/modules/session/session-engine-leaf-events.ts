@@ -98,9 +98,6 @@ export class SessionEngineLeafEvents {
         // only read the store and fail the same way.
         lifetime.assertCurrent();
         try {
-          // Mirrors the live path's own-send drop: the broadcast chat's history also contains the
-          // account's OWN active statuses, which must not come back as if a contact had posted them.
-          if (msg.fromMe) continue;
           // A status whose 24h already ran out is hidden by WhatsApp and would only live until the
           // next purge sweep — don't backfill it (its media was downloaded by getChatHistory
           // regardless; this just skips the row).

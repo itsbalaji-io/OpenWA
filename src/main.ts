@@ -16,6 +16,7 @@ import {
   exemptPublicOperations,
 } from './config/swagger.config';
 import {
+  guardFromWebStreams,
   ignoreLostOutput,
   registerUncaughtExceptionMonitor,
   registerUnhandledRejectionHandler,
@@ -119,6 +120,7 @@ async function bootstrap() {
   // raw stack to stderr, bypassing the structured log pipeline, and exits(1). Route the stack through the
   // logger WITHOUT swallowing the exception, so the crash-and-restart posture is unchanged (see the helper).
   registerUncaughtExceptionMonitor(bootstrapLogger);
+  guardFromWebStreams();
 
   // Validate the environment before anything acts on it. ConfigModule.forRoot runs the same check, but
   // only once NestFactory.create awaits it, which is after the storage root is created and a built-in

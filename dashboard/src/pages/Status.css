@@ -1,0 +1,520 @@
+/* =============================================================================
+   STATUS BROADCAST & AUDIT HUB STYLES (OpenWA Native Theme)
+   ============================================================================= */
+
+.status-page {
+  padding: 1.5rem;
+  max-width: 1400px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* Page Header */
+.status-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.status-header-titles h1 {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 1.625rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 0.25rem;
+}
+
+.status-header-titles p {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  max-width: 800px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.status-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  flex-wrap: wrap;
+}
+
+/* Stats Overview Grid */
+.status-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+}
+
+@media (max-width: 1024px) {
+  .status-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .status-stats-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.status-stat-card {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.125rem 1.25rem;
+  background: var(--bg-white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 10px);
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.status-stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.status-stat-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.status-stat-icon.own {
+  background: var(--primary-soft);
+  color: var(--primary-text);
+}
+
+.status-stat-icon.views {
+  background: color-mix(in srgb, var(--success) 14%, var(--bg-light));
+  color: var(--success-text);
+}
+
+.status-stat-icon.accounts {
+  background: color-mix(in srgb, var(--error) 12%, var(--bg-light));
+  color: var(--error-text);
+}
+
+.status-stat-icon.mode {
+  background: color-mix(in srgb, var(--info) 14%, var(--bg-light));
+  color: var(--info);
+}
+
+.status-stat-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.status-stat-value {
+  font-size: 1.375rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.status-stat-label {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+}
+
+/* History Container & Card */
+.history-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  background: var(--bg-white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 10px);
+  padding: 1.25rem;
+  box-shadow: var(--shadow-sm);
+}
+
+/* Toolbar */
+.history-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.history-search-box {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 40px;
+  padding: 0 0.875rem;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 8px);
+  flex: 1;
+  min-width: 280px;
+  box-sizing: border-box;
+  transition: all 0.2s ease;
+}
+
+.history-search-box:focus-within {
+  border-color: var(--focus-ring);
+  background: var(--bg-white);
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.12);
+}
+
+.history-search-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.history-search-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  outline: none;
+  font-family: inherit;
+}
+
+.history-search-input::placeholder {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+}
+
+.history-filter-pills {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+}
+
+.history-filter-pill {
+  height: 38px;
+  padding: 0 0.875rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  border-radius: 9999px;
+  border: 1px solid var(--border);
+  background: var(--bg-light);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.history-filter-pill:hover {
+  background: var(--bg-white);
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
+.history-filter-pill.active {
+  background: var(--primary);
+  color: #0f172a;
+  font-weight: 600;
+  border-color: transparent;
+  box-shadow: var(--shadow-sm);
+}
+
+/* History Table Layout */
+.history-table-wrapper {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 8px);
+}
+
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.history-table th {
+  padding: 0.875rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  background: var(--bg-light);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.history-table td {
+  padding: 1rem;
+  font-size: 0.875rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.history-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.history-table tbody tr:hover {
+  background: color-mix(in srgb, var(--primary-soft) 30%, var(--bg-white));
+}
+
+.history-table tbody tr.row-revoked {
+  opacity: 0.75;
+  background: color-mix(in srgb, var(--bg-light) 60%, var(--bg-white));
+}
+
+/* Item Content Cell */
+.history-item-content {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 220px;
+}
+
+.history-media-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.history-item-details {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.history-item-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+
+.history-item-caption {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+  margin-top: 0.125rem;
+}
+
+/* Route Badge */
+.history-route-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--info) 14%, var(--bg-white));
+  color: var(--info);
+  border: 1px solid color-mix(in srgb, var(--info) 30%, transparent);
+  white-space: nowrap;
+}
+
+/* Target Accounts Cell */
+.history-accounts-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 180px;
+}
+
+.history-accounts-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.history-account-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  background: var(--bg-light);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+
+.history-account-chip.chip-revoked {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.history-chip-del-btn {
+  background: none;
+  border: none;
+  padding: 0 0.125rem;
+  color: var(--error);
+  font-weight: 700;
+  font-size: 0.75rem;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.history-chip-del-btn:hover {
+  color: var(--error-text);
+}
+
+/* Time & Expiry Cell */
+.history-time-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  white-space: nowrap;
+}
+
+.history-date {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.history-expiry {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* Status Pills */
+.status-pill-active {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--primary-soft);
+  color: var(--primary-text);
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  white-space: nowrap;
+}
+
+.status-pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+  animation: statusPulse 2s infinite;
+}
+
+@keyframes statusPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(34, 197, 94, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+  }
+}
+
+.status-pill-revoked {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--error) 12%, var(--bg-white));
+  color: var(--error-text);
+  border: 1px solid color-mix(in srgb, var(--error) 25%, transparent);
+  white-space: nowrap;
+}
+
+.status-pill-failed {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--bg-light);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+/* Revoke for Everyone Action Button */
+.btn-revoke-for-everyone {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--bg-white);
+  color: var(--error-text);
+  border: 1px solid color-mix(in srgb, var(--error) 35%, var(--border));
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.btn-revoke-for-everyone:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error) 12%, var(--bg-white));
+  border-color: var(--error);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.12);
+}
+
+.btn-revoke-for-everyone:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Empty State */
+.history-empty-cell {
+  padding: 3rem 1rem !important;
+  text-align: center;
+}
+
+.history-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.history-empty-state h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.history-empty-state p {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin: 0;
+}

@@ -1,0 +1,132 @@
+/* =============================================================================
+   SINGLE ACCOUNT STATUS COMPOSE MODAL (OpenWA Native Theme)
+   ============================================================================= */
+
+.status-compose-modal .status-compose-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.status-compose-modal .compose-type-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 8px);
+  overflow: hidden;
+  background: var(--bg-light);
+}
+
+.status-compose-modal .compose-type-toggle button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: var(--text-secondary);
+}
+
+.status-compose-modal .compose-type-toggle button:first-child {
+  border-inline-end: 1px solid var(--border);
+}
+
+.status-compose-modal .compose-type-toggle button:hover:not(.active) {
+  color: var(--text-primary);
+  background: var(--bg-white);
+}
+
+.status-compose-modal .compose-type-toggle button.active {
+  background: var(--primary);
+  color: #0f172a;
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+.status-compose-modal .compose-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.status-compose-modal .compose-field label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.status-compose-modal .single-compose-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1.5rem 1rem;
+  border: 2px dashed var(--border);
+  border-radius: var(--radius, 8px);
+  background: var(--bg-light);
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.status-compose-modal .single-compose-dropzone:hover {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.status-compose-modal .single-compose-preview-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-height: 200px;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 8px);
+  overflow: hidden;
+}
+
+.status-compose-modal .single-compose-preview-card img {
+  max-height: 200px;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+}
+
+.status-compose-modal .single-compose-remove-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: rgba(15, 23, 42, 0.75);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.status-compose-modal .single-compose-remove-btn:hover {
+  background: var(--error);
+}
+
+.status-compose-modal .single-compose-route-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.75rem;
+  border-radius: var(--radius, 8px);
+  background: color-mix(in srgb, var(--info) 8%, var(--bg-light));
+  border: 1px solid color-mix(in srgb, var(--info) 25%, var(--border));
+}
